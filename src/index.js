@@ -891,7 +891,7 @@ async function mineEndIsland() {
     const queue = [startColumn];
     const visited = new Set([startX + ',' + startZ]);
     const columns = [];
-    const maxColumns = 30000;
+    const maxColumns = 60000;
     const directions = [[1, 0], [-1, 0], [0, 1], [0, -1]];
     let cursor = 0;
 
@@ -954,9 +954,12 @@ async function mineEndIsland() {
           block = bot.blockAt(new Vec3(column.x, y, column.z));
           if (!block || block.name !== 'end_stone' || !bot.canDigBlock(block)) continue;
           const feet = bot.entity.position;
-          if (block.position.x === Math.floor(feet.x) &&
-              block.position.y === Math.floor(feet.y) &&
-              block.position.z === Math.floor(feet.z)) {
+          const feetX = Math.floor(feet.x);
+          const feetY = Math.floor(feet.y);
+          const feetZ = Math.floor(feet.z);
+          // Keep both the occupied feet block and the supporting block intact.
+          if ((block.position.x === feetX && block.position.y === feetY && block.position.z === feetZ) ||
+              (block.position.x === feetX && block.position.y === feetY - 1 && block.position.z === feetZ)) {
             skipped++;
             continue;
           }
