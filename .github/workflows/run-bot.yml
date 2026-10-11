@@ -46,6 +46,7 @@ jobs:
           MC_VERSION: ${{ inputs.minecraft_version }}
           MC_USERNAME: ${{ inputs.bot_username || secrets.MC_USERNAME }}
           MC_AUTH: ${{ secrets.MC_AUTH }}
+          BOT_CREDENTIALS: ${{ secrets.BOT_CREDENTIALS }}
           COMMANDER_USERNAME: ${{ secrets.COMMANDER_USERNAME }}
           BOT_COORDINATOR_USERNAME: ${{ secrets.BOT_COORDINATOR_USERNAME }}
           BOT_GROUP: ${{ secrets.BOT_GROUP }}
