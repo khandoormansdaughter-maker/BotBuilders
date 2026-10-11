@@ -569,7 +569,7 @@ async function handleCommand(rawMessage, username) {
   }
   if (lower.startsWith('say ')) {
     const text = command.slice(4).trim();
-    if (text) reply(text);
+    if (text) bot.chat(text.slice(0, 240));
     return;
   }
   reply('Unknown command. Use Builders help.');
