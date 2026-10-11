@@ -1,6 +1,7 @@
 const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
-const { GoalBlock, GoalFollow } = goals;
+const { GoalBlock, GoalFollow, GoalNear } = goals;
+const Vec3 = require('vec3');
 const fs = require('node:fs');
 const path = require('node:path');
 const { loadLitematic } = require('./litematic');
@@ -241,6 +242,19 @@ function handleInternalMessage(username, message) {
   if (parts[0] !== 'BuildersInternal') return false;
 
   if (username.toLowerCase() === coordinatorUsername.toLowerCase() &&
+      parts[1] === 'digout-start' && parts.length === 5) {
+    const diggerName = parts[2];
+    const targetY = Number(parts[3]);
+    const dimensions = parts[4].split('x').map(Number);
+    if (bot.username.toLowerCase() !== diggerName.toLowerCase() &&
+        Number.isInteger(targetY) && dimensions.length === 3 &&
+        dimensions.every((n) => Number.isInteger(n) && n >= 1 && n <= 15)) {
+      void runDigoutWorker(diggerName, targetY, dimensions);
+    }
+    return true;
+  }
+
+  if (username.toLowerCase() === coordinatorUsername.toLowerCase() &&
       parts[1] === 'inventory-request' && parts.length === 4) {
     const [, , requestId, target] = parts;
     if (target.toLowerCase() === bot.username.toLowerCase()) sendInventoryReport(requestId);
@@ -275,6 +289,114 @@ function handleInternalMessage(username, message) {
     return true;
   }
   return true;
+}
+
+function bestPickaxe() {
+  const rank = ['netherite_pickaxe', 'diamond_pickaxe', 'iron_pickaxe', 'stone_pickaxe', 'golden_pickaxe', 'wooden_pickaxe'];
+  const pickaxes = bot.inventory.items().filter((item) => rank.includes(item.name));
+  pickaxes.sort((a, b) => rank.indexOf(a.name) - rank.indexOf(b.name));
+  return pickaxes[0] || null;
+}
+
+async function equipBestPickaxe() {
+  const pickaxe = bestPickaxe();
+  if (!pickaxe) throw new Error('No pickaxe found in inventory.');
+  await bot.equip(pickaxe, 'hand');
+  console.log(`[${bot.username}] Equipped best available pickaxe: ${pickaxe.name}.`);
+  return pickaxe;
+}
+
+function waitMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runDigoutDigger(targetY, dimensions) {
+  state.following = null;
+  bot.pathfinder.setGoal(null);
+  try {
+    await equipBestPickaxe();
+    let steps = 0;
+    while (Math.floor(bot.entity.position.y) > targetY && steps < 256) {
+      const feet = bot.entity.position;
+      const below = bot.blockAt(new Vec3(Math.floor(feet.x), Math.floor(feet.y) - 1, Math.floor(feet.z)));
+      if (!below || below.name === 'air') {
+        await waitMs(350);
+        steps++;
+        continue;
+      }
+      if (below.name.includes('lava')) throw new Error('Lava detected below; stopping to avoid digging into it.');
+      if (!bot.canDigBlock(below)) throw new Error(`Cannot dig block below bot: ${below.name}`);
+      await bot.dig(below);
+      await waitMs(250);
+      steps++;
+    }
+    if (Math.floor(bot.entity.position.y) > targetY) {
+      throw new Error('Could not reach target Y within the dig limit.');
+    }
+
+    const others = configuredBots.filter((name) => name.toLowerCase() !== bot.username.toLowerCase());
+    for (const name of others) {
+      bot.chat(`/tpahere ${name}`);
+      await waitMs(800);
+    }
+    bot.chat(`BuildersInternal digout-start ${bot.username} ${targetY} ${dimensions.join('x')}`);
+    reply(`Digout at Y=${targetY}: sent TPA requests to ${others.length} bot(s); mining area ${dimensions.join('x')}.`);
+  } catch (error) {
+    console.error(`[${bot.username}] Digout descent failed:`, error.message);
+    reply(`Digout stopped: ${error.message}`);
+  }
+}
+
+async function runDigoutWorker(diggerName, targetY, dimensions) {
+  const workers = configuredBots.filter((name) => name.toLowerCase() !== diggerName.toLowerCase());
+  const workerIndex = workers.findIndex((name) => name.toLowerCase() === bot.username.toLowerCase());
+  if (workerIndex < 0 || workers.length === 0) return;
+
+  try {
+    await equipBestPickaxe();
+    bot.pathfinder.setGoal(null);
+    bot.chat(`/tpaccept ${diggerName}`);
+    console.log(`[${bot.username}] Accepted teleport request from ${diggerName}; waiting for teleport.`);
+    await waitMs(3500);
+
+    const centerX = Math.floor(bot.entity.position.x);
+    const centerZ = Math.floor(bot.entity.position.z);
+    const [width, height, depth] = dimensions;
+    const startX = centerX - Math.floor(width / 2);
+    const startZ = centerZ - Math.floor(depth / 2);
+    let mined = 0;
+
+    // Split whole X-columns between workers to reduce duplicate digging.
+    for (let y = targetY + height - 1; y >= targetY; y--) {
+      for (let xOffset = 0; xOffset < width; xOffset++) {
+        if (xOffset % workers.length !== workerIndex) continue;
+        for (let zOffset = 0; zOffset < depth; zOffset++) {
+          const x = startX + xOffset;
+          const z = startZ + zOffset;
+          let block = bot.blockAt(new Vec3(x, y, z));
+          if (!block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air') continue;
+          try {
+            await bot.pathfinder.goto(new GoalNear(x, y, z, 3));
+            block = bot.blockAt(new Vec3(x, y, z));
+            if (!block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air') continue;
+            if (block.name.includes('lava')) {
+              console.warn(`[${bot.username}] Skipping lava block at ${x} ${y} ${z}.`);
+              continue;
+            }
+            if (!bot.canDigBlock(block)) continue;
+            await bot.equip(bestPickaxe(), 'hand');
+            await bot.dig(block);
+            mined++;
+          } catch (error) {
+            console.warn(`[${bot.username}] Could not mine ${x} ${y} ${z}: ${error.message}`);
+          }
+        }
+      }
+    }
+    console.log(`[${bot.username}] Digout finished; mined ${mined} block(s) in assigned columns.`);
+  } catch (error) {
+    console.error(`[${bot.username}] Digout worker failed:`, error.message);
+  }
 }
 
 function combineInventories(reports) {
@@ -358,7 +480,7 @@ async function handleCommand(rawMessage, username) {
   if (isInventoryCommand && bot.username.toLowerCase() !== coordinatorUsername.toLowerCase()) return;
 
   if (lower === 'help') {
-    reply('Commands: follow <playername> | rtp | schem list | schem set <name> | coords set1/set2 <x y z> | material list | holder <bot...> | build schem | say <message>');
+    reply('Commands: follow <playername> | rtp | digout <y> <width>x<height>x<depth> | schem list | schem set <name> | coords set1/set2 <x y z> | material list | holder <bot...> | build schem | say <message>');
     return;
   }
   const followMatch = command.match(/^follow\s+([a-z0-9_]{1,16})$/i);
@@ -389,6 +511,24 @@ async function handleCommand(rawMessage, username) {
       console.error('[' + bot.username + '] RTP movement failed:', error.message);
       reply('RTP movement failed for ' + bot.username + '; check the bot log.');
     }
+    return;
+  }
+  const digoutMatch = command.match(/^digout\\s+(-?\\d+)\\s+(\\d+)x(\\d+)x(\\d+)$/i);
+  if (digoutMatch) {
+    if (bot.username.toLowerCase() !== coordinatorUsername.toLowerCase()) return;
+    const targetY = Number(digoutMatch[1]);
+    const dimensions = digoutMatch.slice(2).map(Number);
+    if (targetY < -64 || targetY > 320 ||
+        dimensions.some((n) => !Number.isInteger(n) || n < 1 || n > 15) ||
+        dimensions.some((n) => n % 2 === 0)) {
+      reply('Use Builders digout <Y> <odd-width>x<odd-height>x<odd-depth> (each dimension 1–15).');
+      return;
+    }
+    if (configuredBots.every((name) => name.toLowerCase() === bot.username.toLowerCase())) {
+      reply('Digout needs at least one other configured bot to accept the teleport and mine.');
+      return;
+    }
+    void runDigoutDigger(targetY, dimensions);
     return;
   }
   if (lower === 'schem list') {
