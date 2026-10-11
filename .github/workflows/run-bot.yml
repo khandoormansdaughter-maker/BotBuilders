@@ -17,7 +17,7 @@ on:
         required: false
         type: string
       bot_username:
-        description: This bot's Minecraft username (blank uses MC_USERNAME secret)
+        description: This bot's Minecraft username (blank uses the first BOT_CREDENTIALS username)
         required: false
         type: string
 
@@ -44,10 +44,20 @@ jobs:
           MC_HOST: ${{ inputs.server_host }}
           MC_PORT: ${{ inputs.server_port }}
           MC_VERSION: ${{ inputs.minecraft_version }}
-          MC_USERNAME: ${{ inputs.bot_username || secrets.MC_USERNAME }}
+          MC_USERNAME: ${{ inputs.bot_username }}
           MC_AUTH: ${{ secrets.MC_AUTH }}
           BOT_CREDENTIALS: ${{ secrets.BOT_CREDENTIALS }}
           COMMANDER_USERNAME: ${{ secrets.COMMANDER }}
           BOT_COORDINATOR_USERNAME: ${{ secrets.BOT_COORDINATOR_USERNAME }}
           BOT_GROUP: ${{ secrets.BOT_GROUP }}
-        run: npm start
+        run: |
+          if [ -z "$MC_USERNAME" ]; then
+            MC_USERNAME="$(printf '%s\n' "$BOT_CREDENTIALS" | sed -n '1{s#/.*##; s/^[[:space:]]*//; s/[[:space:]]*$//; p;}')"
+          fi
+          if [ -z "$MC_USERNAME" ]; then
+            echo "No bot username provided. Enter bot_username in the workflow, or add BOT_CREDENTIALS with username/password lines."
+            exit 1
+          fi
+          echo "MC_USERNAME=$MC_USERNAME" >> "$GITHUB_ENV"
+          export MC_USERNAME
+          npm start
