@@ -1,7 +1,8 @@
 const mineflayer = require('mineflayer');
-const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
+const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const fs = require('node:fs');
 const path = require('node:path');
+const { loadLitematic } = require('./litematic');
 
 const required = ['MC_HOST', 'MC_USERNAME', 'COMMANDER_USERNAME'];
 for (const key of required) {
@@ -40,6 +41,10 @@ function reply(message) {
   bot.chat(String(message).slice(0, 240));
 }
 
+function replyLines(lines) {
+  for (const line of lines) reply(line);
+}
+
 function getSchematics() {
   if (!fs.existsSync(inputDir)) return [];
   return fs.readdirSync(inputDir, { withFileTypes: true })
@@ -61,7 +66,36 @@ const state = {
   spareBlock: null,
 };
 
-function handleCommand(rawMessage, username) {
+async function reportMaterials() {
+  if (!state.schematic) {
+    reply('Choose a schematic first: Builders schem set <name>.');
+    return;
+  }
+  if (!state.schematic.toLowerCase().endsWith('.litematic')) {
+    reply('Material counting currently supports .litematic files only.');
+    return;
+  }
+
+  try {
+    const data = await loadLitematic(path.join(inputDir, state.schematic));
+    const stackSlots = data.materials.reduce((sum, item) => sum + Math.ceil(item.count / 64), 0);
+    const shulkers = Math.ceil(stackSlots / 27);
+    const lines = [
+      `Materials for ${state.schematic}: ${data.blockCount} non-air blocks.`,
+      `Regions: ${data.regions.length}; rough estimate: ${stackSlots} stacks / ${shulkers} shulker boxes (64-item stacks).`,
+    ];
+    const entries = data.materials.map((item) => `${item.block.replace(/^minecraft:/, '')} x${item.count}`);
+    for (let i = 0; i < entries.length; i += 4) {
+      lines.push(entries.slice(i, i + 4).join(', '));
+    }
+    replyLines(lines);
+  } catch (error) {
+    console.error('Could not read selected Litematica file:', error);
+    reply('Could not read that .litematic file. Check the file format; details are in the bot log.');
+  }
+}
+
+async function handleCommand(rawMessage, username) {
   // Only the configured commander can issue actions. Match the sender field,
   // not text inside a message, to avoid impersonation via message contents.
   if (username !== process.env.COMMANDER_USERNAME) return;
@@ -80,7 +114,7 @@ function handleCommand(rawMessage, username) {
 
   if (lower === 'schem list') {
     const names = getSchematics();
-    reply(names.length ? `Schematics: ${names.join(', ')}` : 'No schematics found in Input/. Add .schem/.schematic files; .litematic support is not wired up yet.');
+    reply(names.length ? `Schematics: ${names.join(', ')}` : 'No schematics found in Input/. Add a .litematic, .schem, or .schematic file.');
     return;
   }
 
@@ -110,7 +144,7 @@ function handleCommand(rawMessage, username) {
   }
 
   if (lower === 'material list') {
-    reply('Material accounting is not implemented yet; next step is schematic parsing and inventory comparison.');
+    await reportMaterials();
     return;
   }
 
@@ -130,7 +164,10 @@ function handleCommand(rawMessage, username) {
 
 bot.on('chat', (username, message) => {
   if (username === bot.username) return;
-  handleCommand(message, username);
+  void handleCommand(message, username).catch((error) => {
+    console.error('Command handler error:', error);
+    reply('Command failed; check the bot log for details.');
+  });
 });
 
 // Some servers expose disguised/system messages as chat events rather than
