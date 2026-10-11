@@ -1,0 +1,18 @@
+{
+  "name": "botbuilders",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minecraft building bot controlled through commander chat commands",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "node --check src/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "mineflayer": "^4.32.0",
+    "mineflayer-pathfinder": "^2.4.5"
+  }
+}
