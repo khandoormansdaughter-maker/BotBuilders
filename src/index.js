@@ -1,3 +1,44 @@
+// Minecraft 26.x may expose prismarine-item Item#enchants as a component
+// object ({ enchantments: [{ id, level }] }), while Mineflayer's dig-time
+// calculation expects an array of { name, lvl }. Patch the item loader before
+// Mineflayer loads it so held tools and helmet enchantments are both normalized.
+const prismarineItemPath = require.resolve('prismarine-item');
+const prismarineItemLoader = require(prismarineItemPath);
+
+function normalizeEnchantments(value, registry) {
+  if (Array.isArray(value)) return value;
+  const list = value && Array.isArray(value.enchantments) ? value.enchantments : [];
+  return list.map((entry) => {
+    const id = entry?.id;
+    const name = entry?.name
+      ?? (typeof id === 'number'
+        ? registry.enchantments?.[id]?.name
+        : String(id ?? '').replace(/^minecraft:/, ''));
+    return { name: name || null, lvl: entry?.lvl ?? entry?.level ?? 0 };
+  }).filter((entry) => entry.name);
+}
+
+function patchedPrismarineItem(registryOrVersion) {
+  const Item = prismarineItemLoader(registryOrVersion);
+  const descriptor = Object.getOwnPropertyDescriptor(Item.prototype, 'enchants');
+  if (descriptor?.get && !Item.prototype.__botbuildersComponentEnchants) {
+    const registry = typeof registryOrVersion === 'string'
+      ? require('prismarine-registry')(registryOrVersion)
+      : registryOrVersion;
+    Object.defineProperty(Item.prototype, 'enchants', {
+      configurable: true,
+      get() {
+        return normalizeEnchantments(descriptor.get.call(this), registry);
+      },
+      set: descriptor.set
+    });
+    Object.defineProperty(Item.prototype, '__botbuildersComponentEnchants', { value: true });
+  }
+  return Item;
+}
+
+require.cache[prismarineItemPath].exports = patchedPrismarineItem;
+
 const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const { GoalBlock, GoalFollow, GoalNear } = goals;
@@ -429,36 +470,14 @@ function handleInternalMessage(username, message) {
 
 function normalizeItemEnchantments(item, source = 'item') {
   if (!item || typeof item !== 'object') return;
-
-  // Minecraft 26.x can expose Item#enchants as a component object rather than
-  // the array Mineflayer's dig-time calculation expects. In particular,
-  // digging.js calls .concat() on the held item's enchants and on helmet
-  // enchants, so normalize the property Mineflayer actually reads.
-  const raw = item.enchants;
-  if (Array.isArray(raw)) {
-    // Already in Mineflayer's expected [{ name, lvl }] format.
-  } else if (raw && typeof raw === 'object') {
-    const entries = Array.isArray(raw.enchantments)
-      ? raw.enchantments
-      : (Array.isArray(raw.value) ? raw.value : null);
-    if (entries) {
-      item.enchants = entries
-        .map((entry) => ({
-          name: String(entry?.name ?? entry?.id ?? entry?.type ?? '').replace(/^minecraft:/, ''),
-          lvl: Number(entry?.lvl ?? entry?.level ?? entry?.value ?? 0)
-        }))
-        .filter((entry) => entry.name && Number.isFinite(entry.lvl));
-    } else {
-      console.warn(`[${bot.username}] Dropping unsupported enchantment component on ${item.name || source} (${source}).`);
-      item.enchants = [];
-    }
-  } else {
-    item.enchants = [];
+  // The prismarine-item loader patch above should make this an array. Keep
+  // this check as a diagnostic rather than assigning to a possibly getter-only
+  // property, which would not reliably repair the value Mineflayer reads.
+  if (!Array.isArray(item.enchants)) {
+    console.warn(`[${bot.username}] Item enchantments are still not an array on ${item.name || source} (${source}).`);
   }
-
-  // Keep this legacy field safe too, if a server/plugin provides it.
   if (item.enchantments != null && !Array.isArray(item.enchantments)) {
-    console.warn(`[${bot.username}] Normalizing non-array enchantments on ${item.name || source} (${source}).`);
+    console.warn(`[${bot.username}] Normalizing non-array legacy enchantments on ${item.name || source} (${source}).`);
     item.enchantments = [];
   }
 }
