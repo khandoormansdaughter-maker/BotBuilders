@@ -70,13 +70,44 @@ bot.once('spawn', () => {
 // Log incoming server messages so authentication prompts and chat can be diagnosed
 // from the Actions log. Never log the configured passwords or outgoing auth commands.
 const handledAuthPrompts = new Set();
-bot.on('messagestr', (message, position) => {
+const recentCommandMessages = new Map();
+
+function dispatchChatCommand(username, message, source) {
+  const sender = String(username || '').trim();
+  const text = String(message || '').trim();
+  if (!sender || !text || sender.toLowerCase() === String(bot.username).toLowerCase()) return;
+  const key = sender.toLowerCase() + '|' + text.toLowerCase();
+  const now = Date.now();
+  const previous = recentCommandMessages.get(key);
+  if (previous && now - previous < 1500) return;
+  recentCommandMessages.set(key, now);
+  console.log('[' + bot.username + '] [CHAT COMMAND INPUT via ' + source + '] sender=' + sender + ' message=' + text);
+  void handleCommand(text, sender).catch((error) => {
+    console.error('[' + bot.username + '] Command handler error:', error);
+    reply('Command failed; check the bot log for details.');
+  });
+}
+
+bot.on('messagestr', (message, position, jsonMsg, senderUuid) => {
   const text = String(message).replace(/§[0-9a-fk-or]/gi, '').trim();
   console.log(`[${bot.username}] [INCOMING ${position || 'unknown'}] ${text}`);
 
   // Ignore ordinary player chat so a player cannot trigger a password command
   // by typing a fake prompt. Auth plugins may use system or game-info messages.
-  if (position === 'chat') return;
+  if (position === 'chat') {
+    // Some server chat formats appear in messagestr but do not trigger Mineflayer's
+    // parsed 'chat' event. Resolve the sender UUID through the player list as a fallback.
+    const senderEntry = senderUuid
+      ? Object.entries(bot.players).find(([, player]) =>
+          player.uuid && String(player.uuid).toLowerCase() === String(senderUuid).toLowerCase())
+      : null;
+    if (senderEntry) {
+      dispatchChatCommand(senderEntry[0], text, 'messagestr');
+    } else {
+      console.log('[' + bot.username + '] [CHAT COMMAND INPUT] Could not resolve chat sender UUID; parsed chat event will be used if available.');
+    }
+    return;
+  }
   let action = null;
   if (/\bregister\b/i.test(text) && /\/register\b/i.test(text)) {
     action = 'register';
@@ -281,8 +312,14 @@ async function handleCommand(rawMessage, username) {
     handleInternalMessage(username, message);
     return;
   }
-  if (username !== process.env.COMMANDER_USERNAME) return;
-  if (!message.toLowerCase().startsWith('Builders ')) return;
+  const configuredCommander = String(process.env.COMMANDER_USERNAME || '').trim();
+  if (username.toLowerCase() !== configuredCommander.toLowerCase()) {
+    if (message.toLowerCase().startsWith('builders ')) {
+      console.log('[' + bot.username + '] Ignoring Builders command from "' + username + '"; COMMANDER_USERNAME is configured as "' + configuredCommander + '".');
+    }
+    return;
+  }
+  if (!message.toLowerCase().startsWith('builders ')) return;
 
   const command = message.slice('Builders '.length).trim();
   const lower = command.toLowerCase();
@@ -338,11 +375,7 @@ async function handleCommand(rawMessage, username) {
 }
 
 bot.on('chat', (username, message) => {
-  if (username === bot.username) return;
-  void handleCommand(message, username).catch((error) => {
-    console.error(`[${bot.username}] Command handler error:`, error);
-    reply('Command failed; check the bot log for details.');
-  });
+  dispatchChatCommand(username, message, 'chat');
 });
 
 // Disguised/system messages need a tested parser before they can be trusted.
