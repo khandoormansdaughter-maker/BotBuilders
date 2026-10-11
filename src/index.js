@@ -1,5 +1,6 @@
 const mineflayer = require('mineflayer');
-const { pathfinder, Movements } = require('mineflayer-pathfinder');
+const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
+const { GoalBlock, GoalFollow } = goals;
 const fs = require('node:fs');
 const path = require('node:path');
 const { loadLitematic } = require('./litematic');
@@ -179,7 +180,7 @@ function parseCoordinates(value) {
   return { x: Math.floor(parts[0]), y: Math.floor(parts[1]), z: Math.floor(parts[2]) };
 }
 
-const state = { schematic: null, pos1: null, pos2: null };
+const state = { schematic: null, pos1: null, pos2: null, following: null };
 const pendingInventory = new Map();
 let requestCounter = 0;
 
@@ -357,7 +358,37 @@ async function handleCommand(rawMessage, username) {
   if (isInventoryCommand && bot.username.toLowerCase() !== coordinatorUsername.toLowerCase()) return;
 
   if (lower === 'help') {
-    reply('Commands: schem list | schem set <name> | coords set1/set2 <x y z> | material list | holder <bot...> | build schem | say <message>');
+    reply('Commands: follow <playername> | rtp | schem list | schem set <name> | coords set1/set2 <x y z> | material list | holder <bot...> | build schem | say <message>');
+    return;
+  }
+  const followMatch = command.match(/^follow\\s+([a-z0-9_]{1,16})$/i);
+  if (followMatch) {
+    const targetName = followMatch[1];
+    const player = bot.players[targetName] ||
+      Object.entries(bot.players).find(([name]) => name.toLowerCase() === targetName.toLowerCase())?.[1];
+    if (!player || !player.entity) {
+      reply(`Can't see player ${targetName}. Make sure they're online and nearby, then try again.`);
+      return;
+    }
+    state.following = targetName;
+    bot.pathfinder.setGoal(new GoalFollow(player.entity, 2), true);
+    console.log(`[${bot.username}] Following player ${targetName}.`);
+    reply(`Following ${targetName}.`);
+    return;
+  }
+  if (lower === 'rtp') {
+    state.following = null;
+    try {
+      bot.pathfinder.setGoal(null);
+      await bot.pathfinder.goto(new GoalBlock(2, 116, -8));
+      // Mineflayer look() takes radians. Yaw -179 degrees faces north (-Z);
+      // pitch 0.6 degrees keeps the view nearly level.
+      await bot.look(-179 * Math.PI / 180, 0.6 * Math.PI / 180, true);
+      reply('Reached 2 116 -8, facing north.');
+    } catch (error) {
+      console.error('[' + bot.username + '] RTP movement failed:', error.message);
+      reply('RTP movement failed for ' + bot.username + '; check the bot log.');
+    }
     return;
   }
   if (lower === 'schem list') {
