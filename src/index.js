@@ -109,8 +109,22 @@ bot.on('messagestr', (message, position, jsonMsg, senderUuid) => {
     }
     return;
   }
+  if (/successful login/i.test(text)) {
+    console.log(`[${bot.username}] LOGIN CONFIRMED by server.`);
+    const statusDir = process.env.LOGIN_STATUS_DIR;
+    if (statusDir) {
+      try {
+        fs.mkdirSync(statusDir, { recursive: true });
+        const markerName = String(bot.username).replace(/[^a-z0-9_-]/gi, '_') + '.logged-in';
+        fs.writeFileSync(path.join(statusDir, markerName), new Date().toISOString(), 'utf8');
+      } catch (error) {
+        console.error(`[${bot.username}] Could not write login status marker:`, error.message);
+      }
+    }
+  }
+
   let action = null;
-  if (/\bregister\b/i.test(text) && /\/register\b/i.test(text)) {
+  if (/\\bregister\\b/i.test(text) && /\\/register\\b/i.test(text)) {
     action = 'register';
   } else if (/\blog\s*in\b|\blogin\b/i.test(text) && /\/login\b/i.test(text)) {
     action = 'login';
