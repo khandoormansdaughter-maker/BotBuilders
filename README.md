@@ -1,10 +1,10 @@
 # BotBuilders
 
-Minecraft bots that can inspect schematic files, plan builds, gather/check materials, and construct them from commander chat commands.
+Minecraft bots that inspect schematic files, estimate material requirements, plan builds, and eventually construct them from commander chat commands.
 
 ## Current status
 
-The initial Node.js/Mineflayer scaffold is in place. It connects to a server, checks the sender of chat commands against a configured commander username, lists schematic files, selects a file, stores two coordinates, and supports a basic `say` command. **Actual schematic parsing, material accounting, and block placement are not implemented yet.** The bot deliberately refuses to claim a build is ready until those systems exist.
+The Node.js/Mineflayer scaffold connects to a server, authorizes commands by the chat sender username, lists/selects schematic files, stores two coordinates, and supports a basic `say` command. **Litematica parsing and a first-pass material report are now implemented. Actual block placement, live inventory comparison, and supply staging are not implemented.** The bot deliberately refuses to claim a build is ready until those systems exist.
 
 ## Requirements
 
@@ -26,7 +26,7 @@ GitHub-hosted runners are temporary and their outbound network access may not wo
 
 ## Schematic files
 
-Put supported files in `Input/`. The starter can list `.schem`, `.schematic`, and `.litematic` filenames, but this is **not** the same as being able to parse or build them. Litematica's `.litematic` format needs a compatible parser or conversion step; support will be added before enabling real builds.
+Put files in `Input/`. The bot can list `.schem`, `.schematic`, and `.litematic` files, but **material counting currently supports only `.litematic`**. Sponge schematic formats are listed but not parsed yet.
 
 ## Chat commands
 
@@ -34,26 +34,28 @@ Commands are accepted only when the chat event's sender username exactly matches
 
 - `Builders help` — show command list
 - `Builders schem list` — list files in `Input/`
-- `Builders schem set <filename>` — select an existing file
+- `Builders schem set <filename>` — select an existing file (include the extension)
 - `Builders coords set1 <x y z>` — set first corner
 - `Builders coords set2 <x y z>` — set second corner
-- `Builders material list` — planned; currently reports that material accounting is not implemented
-- `Builders build schem` — planned; currently disabled until validation and placement are implemented
+- `Builders material list` — for a selected `.litematic`, count non-air blocks by type and estimate stacks/shulker boxes
+- `Builders build schem` — disabled until placement validation, inventory checks, and safe execution are implemented
 - `Builders say <message>` — send a message to public chat
+
+The shulker estimate is approximate: it assumes 64-item stacks and 27 stacks per box, and does not yet account for item-specific stack limits, inventory contents, tools, or spare blocks.
 
 ## Build roadmap
 
-1. **Schematic adapter:** parse dimensions, palette, block states, and required counts; validate Litematica support or document a reliable conversion workflow.
-2. **Placement validation:** verify both corners, orientation, world height, bounding-box dimensions, and loaded/accessible space before moving blocks.
-3. **Inventory and supply planning:** count inventory, bundles, and shulker contents; account for tool requirements and spare traversal blocks; report shortages before starting.
-4. **Build executor:** place blocks in a safe order, pathfind around obstacles, track progress, and recover from interruptions without silently duplicating work.
-5. **Supply staging:** stage clearly labeled shulkers only after the plan is validated; report coordinates and contents, and avoid overwriting existing blocks without explicit approval.
-6. **Chat hardening:** support server-specific disguised/system messages only through tested parsers; ignore messages whose sender cannot be authenticated, rate-limit commands, and avoid treating arbitrary chat text as authority.
-7. **Tests and CI:** unit-test parsing, inventory arithmetic, coordinate bounds, command authorization, and dry-run plans before allowing real placement.
+1. **Test the parser:** validate Litematica NBT parsing and palette decoding against known sample files, including empty blocks and multiple regions.
+2. **Schematic adapter:** support Sponge `.schem` files and expose dimensions/origin/orientation.
+3. **Placement validation:** verify both corners, orientation, world height, bounding-box dimensions, and loaded/accessibility before moving blocks.
+4. **Inventory and supply planning:** count inventory and shulker contents; account for tool requirements and spare traversal blocks; report shortages before starting.
+5. **Build executor:** place blocks in a safe order, pathfind around obstacles, track progress, and recover from interruptions without silently duplicating work.
+6. **Supply staging:** stage clearly labeled shulkers only after the plan is validated; report coordinates and contents, and avoid overwriting existing blocks without explicit approval.
+7. **Chat hardening and tests:** support server-specific system messages only through tested parsers; ignore messages whose sender cannot be authenticated; test parsing, arithmetic, bounds, authorization, and dry-run plans before allowing real placement.
 
 ## Safety and reliability notes
 
 - Test on a private or disposable world first. Building can alter or replace world blocks.
-- The bot should default to a dry-run plan until schematic parsing, bounds checks, and material checks pass.
+- Keep real placement disabled until parsing, bounds checks, and material checks pass.
 - Never trust a username-looking string inside a message as the sender identity. Disguised chat formats must be explicitly parsed and tested for the target server.
 - Do not store credentials in source files or logs.
