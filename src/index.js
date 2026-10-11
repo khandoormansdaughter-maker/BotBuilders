@@ -16,6 +16,39 @@ const port = Number(process.env.MC_PORT || 25565);
 const version = process.env.MC_VERSION || false;
 const inputDir = path.resolve(process.env.SCHEMATIC_DIR || 'Input');
 const coordinatorUsername = process.env.BOT_COORDINATOR_USERNAME || process.env.MC_USERNAME;
+
+// BOT_CREDENTIALS is a repository Actions secret with one "username/password"
+// pair per line. Passwords are never printed to logs.
+function loadBotCredentials(raw) {
+  const credentials = new Map();
+  const lines = (raw || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length > 5) {
+    console.error('BOT_CREDENTIALS supports at most 5 botname/botpassword lines.');
+    process.exit(1);
+  }
+  for (const line of lines) {
+    const slash = line.indexOf('/');
+    if (slash <= 0 || slash === line.length - 1) {
+      console.error('Invalid BOT_CREDENTIALS entry. Use one botname/botpassword pair per line.');
+      process.exit(1);
+    }
+    const username = line.slice(0, slash).trim();
+    const password = line.slice(slash + 1).trim();
+    if (!/^[a-z0-9_]{1,16}$/i.test(username) || !password) {
+      console.error('Invalid BOT_CREDENTIALS username or empty password.');
+      process.exit(1);
+    }
+    const key = username.toLowerCase();
+    if (credentials.has(key)) {
+      console.error('Duplicate username in BOT_CREDENTIALS.');
+      process.exit(1);
+    }
+    credentials.set(key, password);
+  }
+  return credentials;
+}
+
+const botCredentials = loadBotCredentials(process.env.BOT_CREDENTIALS);
 const configuredBots = (process.env.BOT_GROUP || process.env.MC_USERNAME)
   .split(',').map((name) => name.trim()).filter(Boolean);
 const bot = mineflayer.createBot({
@@ -31,6 +64,31 @@ bot.loadPlugin(pathfinder);
 bot.once('spawn', () => {
   bot.pathfinder.setMovements(new Movements(bot));
   console.log(`Connected as ${bot.username}. Coordinator: ${coordinatorUsername}. Waiting for commander chat commands.`);
+});
+
+// Auth plugins usually send these prompts as system messages. Only inspect system
+// messages so a player cannot trigger a password command by typing a fake prompt in chat.
+const handledAuthPrompts = new Set();
+bot.on('messagestr', (message, position) => {
+  if (position !== 'system') return;
+  const text = String(message).replace(/§[0-9a-fk-or]/gi, '').trim();
+  let action = null;
+  if (/Please,\s*register to the server with the command:\s*\/register\s*<password>\s+<password>/i.test(text)) {
+    action = 'register';
+  } else if (/Please,\s*login with the command:\s*\/login\s*<password>/i.test(text)) {
+    action = 'login';
+  }
+  if (!action || handledAuthPrompts.has(action)) return;
+  handledAuthPrompts.add(action);
+
+  const password = botCredentials.get(String(bot.username).toLowerCase());
+  if (!password) {
+    console.error(`Server requested ${action}, but BOT_CREDENTIALS has no entry for this bot username.`);
+    return;
+  }
+  if (action === 'register') bot.chat(`/register ${password} ${password}`);
+  else bot.chat(`/login ${password}`);
+  console.log(`Sent / ${action} command in response to the server's system prompt.`);
 });
 
 bot.on('kicked', (reason) => console.error('Kicked from server:', reason));
