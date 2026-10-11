@@ -332,6 +332,18 @@ function handleInternalMessage(username, message) {
   return true;
 }
 
+function normalizeInventoryEnchantments() {
+  // Some newer server/protocol combinations expose enchantments in a non-array
+  // shape, while Mineflayer/pathfinder tool calculations expect an array.
+  // Normalize only malformed values so digout can continue with ordinary tool stats.
+  for (const item of bot.inventory.items()) {
+    if (item.enchantments != null && !Array.isArray(item.enchantments)) {
+      console.warn(`[${bot.username}] Normalizing unsupported enchantment data on ${item.name} for tool compatibility.`);
+      item.enchantments = [];
+    }
+  }
+}
+
 function bestPickaxe() {
   const rank = ['netherite_pickaxe', 'diamond_pickaxe', 'iron_pickaxe', 'stone_pickaxe', 'golden_pickaxe', 'wooden_pickaxe'];
   const pickaxes = bot.inventory.items().filter((item) => rank.includes(item.name));
@@ -340,6 +352,7 @@ function bestPickaxe() {
 }
 
 async function equipBestPickaxe() {
+  normalizeInventoryEnchantments();
   const pickaxe = bestPickaxe();
   if (!pickaxe) throw new Error('No pickaxe found in inventory.');
   await bot.equip(pickaxe, 'hand');
@@ -537,6 +550,7 @@ function warnDigoutHazard(diggerName, hazardPosition, kind) {
 
 async function runDigoutDigger(targetY, dimensions) {
   state.following = null;
+  normalizeInventoryEnchantments();
   bot.pathfinder.setGoal(null);
   try {
     await equipBestPickaxe();
