@@ -70,9 +70,22 @@ const bot = mineflayer.createBot({
 
 bot.loadPlugin(pathfinder);
 
+let hasSpawned = false;
+let serverSwitchSent = false;
+let loginConfirmed = false;
+
+function switchToConfiguredServer() {
+  if (!loginConfirmed || !hasSpawned || serverSwitchSent) return;
+  serverSwitchSent = true;
+  console.log(`[${bot.username}] Login confirmed and world spawned. Sending /server ${targetServer}.`);
+  bot.chat(`/server ${targetServer}`);
+}
+
 bot.once('spawn', () => {
+  hasSpawned = true;
   bot.pathfinder.setMovements(new Movements(bot));
   console.log(`[${bot.username}] Connected. Coordinator: ${coordinatorUsername}. Waiting for commander chat commands.`);
+  switchToConfiguredServer();
 });
 
 // Log incoming server messages so authentication prompts and chat can be diagnosed
@@ -118,10 +131,11 @@ bot.on('messagestr', (message, position, jsonMsg, senderUuid) => {
     }
     return;
   }
-  if (/successful login/i.test(text) && !handledLoginConfirmations.has(String(bot.username).toLowerCase())) {
+  if (/success(?:ful(?:ly)?\s+login|fully\s+logged\s+in|fully\s+authenticated)/i.test(text) && !handledLoginConfirmations.has(String(bot.username).toLowerCase())) {
     handledLoginConfirmations.add(String(bot.username).toLowerCase());
-    console.log(`[${bot.username}] LOGIN CONFIRMED by server. Sending /server ${targetServer}.`);
-    bot.chat(`/server ${targetServer}`);
+    loginConfirmed = true;
+    console.log(`[${bot.username}] LOGIN CONFIRMED by server message: ${text}`);
+    switchToConfiguredServer();
 
     const statusDir = process.env.LOGIN_STATUS_DIR;
     if (statusDir) {
