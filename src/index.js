@@ -861,6 +861,128 @@ async function runDigoutWorker(diggerName, targetY, dimensions) {
   }
 }
 
+
+function findTopEndstoneColumn(x, z, scanTop = 319, scanBottom = 0) {
+  // Only trust fully loaded columns. Unknown chunks are explored by walking to
+  // reachable island columns; they are never treated as empty space.
+  for (let y = scanTop; y >= scanBottom; y--) {
+    const block = bot.blockAt(new Vec3(x, y, z));
+    if (!block) return null;
+    if (block.name === 'end_stone') return { x, z, topY: y };
+  }
+  return null;
+}
+
+async function mineEndIsland() {
+  if (bot.username.toLowerCase() !== coordinatorUsername.toLowerCase()) return;
+  state.following = null;
+  bot.pathfinder.setGoal(null);
+  try {
+    await equipBestPickaxe();
+    const startX = Math.floor(bot.entity.position.x);
+    const startZ = Math.floor(bot.entity.position.z);
+    const startColumn = findTopEndstoneColumn(startX, startZ);
+    if (!startColumn) {
+      reply('Mine island stopped: no loaded top-layer endstone found at your position. Stand on the End island and try again.');
+      return;
+    }
+
+    reply('Mine island started: mapping connected End-stone surface first; this can take a long time.');
+    const queue = [startColumn];
+    const visited = new Set([startX + ',' + startZ]);
+    const columns = [];
+    const maxColumns = 30000;
+    const directions = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    let cursor = 0;
+
+    // Discover reachable top-surface columns before mining. This avoids
+    // confusing void or separate islands with the island currently occupied.
+    while (cursor < queue.length && columns.length < maxColumns) {
+      const current = queue[cursor++];
+      columns.push(current);
+      for (const [dx, dz] of directions) {
+        const x = current.x + dx;
+        const z = current.z + dz;
+        const key = x + ',' + z;
+        if (visited.has(key)) continue;
+        visited.add(key);
+
+        let candidate = findTopEndstoneColumn(x, z);
+        if (!candidate) {
+          try {
+            await bot.pathfinder.goto(new GoalNear(current.x, current.topY + 1, current.z, 2));
+            candidate = findTopEndstoneColumn(x, z);
+          } catch (_) {
+            candidate = null;
+          }
+        }
+        if (!candidate || Math.abs(candidate.topY - current.topY) > 1) continue;
+        try {
+          await bot.pathfinder.goto(new GoalNear(x, candidate.topY + 1, z, 1));
+          const refreshed = findTopEndstoneColumn(x, z);
+          if (!refreshed || Math.abs(refreshed.topY - current.topY) > 1) continue;
+          queue.push(refreshed);
+        } catch (_) {
+          // Unreachable columns, cliffs, and unloaded boundaries are skipped.
+        }
+      }
+      if (columns.length % 100 === 0) {
+        console.log('[' + bot.username + '] End island mapping: ' + columns.length + ' surface columns visited; ' + (queue.length - cursor) + ' queued.');
+      }
+    }
+
+    if (columns.length >= maxColumns) {
+      console.warn('[' + bot.username + '] End island scan hit the ' + maxColumns + '-column safety limit; only the mapped area will be processed.');
+    }
+    if (columns.length < 2) {
+      reply('Mine island stopped: could not map a connected island surface from this position.');
+      return;
+    }
+
+    // Mine downward in layers while leaving the bottom layer as a continuous
+    // floor. Never dig the block currently occupied by the bot.
+    const lowestY = 1;
+    let mined = 0;
+    let skipped = 0;
+    const highestY = Math.max(...columns.map((column) => column.topY));
+    for (let y = highestY; y > lowestY; y--) {
+      for (const column of columns) {
+        let block = bot.blockAt(new Vec3(column.x, y, column.z));
+        if (!block || block.name !== 'end_stone') continue;
+        try {
+          await bot.pathfinder.goto(new GoalNear(column.x, y, column.z, 3));
+          block = bot.blockAt(new Vec3(column.x, y, column.z));
+          if (!block || block.name !== 'end_stone' || !bot.canDigBlock(block)) continue;
+          const feet = bot.entity.position;
+          if (block.position.x === Math.floor(feet.x) &&
+              block.position.y === Math.floor(feet.y) &&
+              block.position.z === Math.floor(feet.z)) {
+            skipped++;
+            continue;
+          }
+          const pickaxe = bestPickaxe();
+          if (!pickaxe) throw new Error('No pickaxe found in inventory.');
+          await bot.equip(pickaxe, 'hand');
+          normalizeInventoryEnchantments();
+          await bot.dig(block);
+          mined++;
+        } catch (error) {
+          console.warn('[' + bot.username + '] End island could not mine ' + column.x + ' ' + y + ' ' + column.z + ': ' + error.message);
+        }
+      }
+      if (y % 8 === 0) {
+        console.log('[' + bot.username + '] End island mining progress: layer Y=' + y + ', mined=' + mined + ', skipped=' + skipped + '.');
+      }
+    }
+    const pickaxe = bestPickaxe();
+    if (pickaxe) await bot.equip(pickaxe, 'hand');
+    reply('Mine island finished: mined ' + mined + ' endstone block(s) across ' + columns.length + ' mapped surface columns. Left a bottom floor; skipped ' + skipped + ' unsafe block(s).');
+  } catch (error) {
+    console.error('[' + bot.username + '] Mine island failed:', error);
+    reply('Mine island failed for ' + bot.username + '; check the bot log.');
+  }
+}
+
 function combineInventories(reports) {
   const combined = new Map();
   for (const inventory of reports.values()) {
@@ -942,7 +1064,7 @@ async function handleCommand(rawMessage, username) {
   if (isInventoryCommand && bot.username.toLowerCase() !== coordinatorUsername.toLowerCase()) return;
 
   if (lower === 'help') {
-    reply('Commands: follow <playername> | tpa <playername> | rtp | gear | digout <y> <width>x<height>x<depth> | schem list | schem set <name> | coords set1/set2 <x y z> | material list | holder <bot...> | build schem | say <message>');
+    reply('Commands: follow <playername> | tpa <playername> | rtp | gear | mine island | digout <y> <width>x<height>x<depth> | schem list | schem set <name> | coords set1/set2 <x y z> | material list | holder <bot...> | build schem | say <message>');
     return;
   }
   const tpaMatch = command.match(/^tpa\s+([a-z0-9_]{1,16})$/i);
@@ -1017,6 +1139,11 @@ async function handleCommand(rawMessage, username) {
       console.error('[' + bot.username + '] RTP movement/click failed:', error.message);
       reply('RTP movement/click failed for ' + bot.username + '; check the bot log.');
     }
+    return;
+  }
+  if (lower === 'mine island') {
+    if (bot.username.toLowerCase() !== coordinatorUsername.toLowerCase()) return;
+    void mineEndIsland();
     return;
   }
   const digoutMatch = command.match(/^digout\s+(-?\d+)\s+(\d+)x(\d+)x(\d+)$/i);
