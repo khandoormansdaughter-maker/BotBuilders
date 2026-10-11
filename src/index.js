@@ -366,15 +366,24 @@ function handleInternalMessage(username, message) {
   return true;
 }
 
+function normalizeItemEnchantments(item, source = 'item') {
+  if (!item || typeof item !== 'object') return;
+  // Mineflayer's dig-time calculation calls .concat() on enchantments. Some
+  // protocol/server combinations expose that field as an NBT object instead
+  // of the array expected by prismarine-block.
+  if (item.enchantments != null && !Array.isArray(item.enchantments)) {
+    console.warn(`[${bot.username}] Normalizing non-array enchantments on ${item.name || source} (${source}).`);
+    item.enchantments = [];
+  }
+}
+
 function normalizeInventoryEnchantments() {
-  // Some newer server/protocol combinations expose enchantments in a non-array
-  // shape, while Mineflayer/pathfinder tool calculations expect an array.
-  // Normalize only malformed values so digout can continue with ordinary tool stats.
-  for (const item of bot.inventory.items()) {
-    if (item.enchantments != null && !Array.isArray(item.enchantments)) {
-      console.warn(`[${bot.username}] Normalizing unsupported enchantment data on ${item.name} for tool compatibility.`);
-      item.enchantments = [];
-    }
+  for (const item of bot.inventory.items()) normalizeItemEnchantments(item, 'inventory');
+  // The held/equipment item may be a separate object from the inventory stack.
+  normalizeItemEnchantments(bot.heldItem, 'held item');
+  const equipment = bot.entity?.equipment;
+  if (Array.isArray(equipment)) {
+    for (const [slot, item] of equipment.entries()) normalizeItemEnchantments(item, `equipment slot ${slot}`);
   }
 }
 
@@ -390,6 +399,7 @@ async function equipBestPickaxe() {
   const pickaxe = bestPickaxe();
   if (!pickaxe) throw new Error('No pickaxe found in inventory.');
   await bot.equip(pickaxe, 'hand');
+  normalizeInventoryEnchantments();
   console.log(`[${bot.username}] Equipped best available pickaxe: ${pickaxe.name}.`);
   return pickaxe;
 }
