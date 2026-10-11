@@ -124,7 +124,7 @@ bot.on('messagestr', (message, position, jsonMsg, senderUuid) => {
   }
 
   let action = null;
-  if (/\\bregister\\b/i.test(text) && /\\/register\\b/i.test(text)) {
+  if (/\bregister\b/i.test(text) && /\/register\b/i.test(text)) {
     action = 'register';
   } else if (/\blog\s*in\b|\blogin\b/i.test(text) && /\/login\b/i.test(text)) {
     action = 'login';
