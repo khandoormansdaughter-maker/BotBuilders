@@ -19,10 +19,11 @@ In **Settings → Secrets and variables → Actions**, configure:
 - `BOT_COORDINATOR_USERNAME`: username of the one bot instance that coordinates inventory queries
 - `BOT_GROUP`: comma-separated Minecraft usernames for the team, e.g. `BuilderOne,BuilderTwo,BuilderThree`
 - `MC_AUTH` (optional): Mineflayer authentication mode; defaults to `offline`
+- `BOT_CREDENTIALS` (optional): up to five lines, one per bot, formatted `botname/botpassword`; each bot uses the password matching its current `MC_USERNAME`/`bot_username`
 
 Run **Actions → Run BotBuilders → Run workflow** once per bot, using the same server and a distinct `bot_username` for each instance. Every bot must use the same `BOT_COORDINATOR_USERNAME`, `BOT_GROUP`, and `COMMANDER_USERNAME`. Keep the coordinator's username in `BOT_GROUP`. Inventory commands should be sent to the coordinator bot.
 
-Do not put passwords or tokens in workflow inputs, commit them to the repository, or send them in chat. Offline-mode servers typically use username-only login; server-specific authentication plugins may need a separate login flow.
+Add `BOT_CREDENTIALS` under repository **Settings → Secrets and variables → Actions → New repository secret**. Put one pair on each line, for example `BuilderOne/replace-with-password` and `BuilderTwo/replace-with-password` (use your real usernames and passwords; these examples are placeholders). Up to five lines are supported. The bot responds to the exact register/login prompts when they arrive as system messages, using only the password matching its own username. Never commit passwords or put them in workflow inputs. Offline-mode servers typically use username-only login; if the server sends prompts as ordinary player chat rather than system messages, the bot intentionally will not react to avoid leaking credentials.
 
 GitHub-hosted runners are temporary and their outbound network access may not work with every server. Each workflow run has a six-hour job limit and stops when the job ends.
 
