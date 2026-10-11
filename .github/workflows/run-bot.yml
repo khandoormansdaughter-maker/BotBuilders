@@ -71,7 +71,10 @@ jobs:
             echo "Starting bot process $((count + 1)) for username: $username"
             MC_USERNAME="$username" npm start &
             count=$((count + 1))
-            sleep 2
+            if [ "$count" -lt 5 ]; then
+              echo "Waiting 30 seconds before starting the next bot to avoid server login rate limits."
+              sleep 30
+            fi
           done <<< "$BOT_CREDENTIALS"
 
           if [ "$count" -eq 0 ]; then
