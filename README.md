@@ -14,14 +14,13 @@ The Node.js/Mineflayer scaffold connects to a server, authorizes commands by the
 
 In **Settings → Secrets and variables → Actions**, configure:
 
-- `MC_USERNAME`: default bot username, used if the workflow input is blank
 - `COMMANDER`: exact in-game username allowed to issue commands (passed to the bot as `COMMANDER_USERNAME`)
 - `BOT_COORDINATOR_USERNAME`: username of the one bot instance that coordinates inventory queries
 - `BOT_GROUP`: comma-separated Minecraft usernames for the team, e.g. `BuilderOne,BuilderTwo,BuilderThree`
 - `MC_AUTH` (optional): Mineflayer authentication mode; defaults to `offline`
-- `BOT_CREDENTIALS` (optional): up to five lines, one per bot, formatted `botname/botpassword`; each bot uses the password matching its current `MC_USERNAME`/`bot_username`
+- `BOT_CREDENTIALS` (optional if you enter a bot username in the workflow): up to five lines, one per bot, formatted `botname/botpassword`; when the workflow's `bot_username` input is blank, the first username in this secret is used by default
 
-Run **Actions → Run BotBuilders → Run workflow** once per bot, using the same server and a distinct `bot_username` for each instance. Every bot must use the same `BOT_COORDINATOR_USERNAME`, `BOT_GROUP`, and `COMMANDER`. Keep the coordinator's username in `BOT_GROUP`. Inventory commands should be sent to the coordinator bot.
+Run **Actions → Run BotBuilders → Run workflow** once per bot, using the same server and a distinct `bot_username` for each instance. If you leave `bot_username` blank, the first username in `BOT_CREDENTIALS` is used, so enter the desired bot username in the workflow when launching additional bots. Every bot must use the same `BOT_COORDINATOR_USERNAME`, `BOT_GROUP`, and `COMMANDER`. Keep the coordinator's username in `BOT_GROUP`. Inventory commands should be sent to the coordinator bot.
 
 Add `BOT_CREDENTIALS` under repository **Settings → Secrets and variables → Actions → New repository secret**. Put one pair on each line, for example `BuilderOne/replace-with-password` and `BuilderTwo/replace-with-password` (use your real usernames and passwords; these examples are placeholders). Up to five lines are supported. The bot responds to the exact register/login prompts when they arrive as system messages, using only the password matching its own username. Never commit passwords or put them in workflow inputs. Offline-mode servers typically use username-only login; if the server sends prompts as ordinary player chat rather than system messages, the bot intentionally will not react to avoid leaking credentials.
 
