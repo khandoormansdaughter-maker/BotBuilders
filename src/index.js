@@ -71,14 +71,34 @@ const bot = mineflayer.createBot({
 bot.loadPlugin(pathfinder);
 
 let hasSpawned = false;
-let serverSwitchSent = false;
 let loginConfirmed = false;
+let serverSwitchAttempts = 0;
+let serverSwitchTimer = null;
+const maxServerSwitchAttempts = 3;
 
 function switchToConfiguredServer() {
-  if (!loginConfirmed || !hasSpawned || serverSwitchSent) return;
-  serverSwitchSent = true;
-  console.log(`[${bot.username}] Login confirmed and world spawned. Sending /server ${targetServer}.`);
-  bot.chat(`/server ${targetServer}`);
+  if (!loginConfirmed || !hasSpawned || serverSwitchAttempts >= maxServerSwitchAttempts) return;
+  if (serverSwitchTimer) return;
+
+  // AuthMe can emit "Successful login!" before it has finished releasing the
+  // player into the lobby. Give it time, then retry if the proxy ignores /server.
+  const delay = serverSwitchAttempts === 0 ? 3000 : 5000;
+  serverSwitchTimer = setTimeout(() => {
+    serverSwitchTimer = null;
+    if (!loginConfirmed || !hasSpawned || serverSwitchAttempts >= maxServerSwitchAttempts) return;
+    serverSwitchAttempts += 1;
+    console.log(`[${bot.username}] Sending /server ${targetServer} (attempt ${serverSwitchAttempts}/${maxServerSwitchAttempts}).`);
+    bot.chat(`/server ${targetServer}`);
+
+    if (serverSwitchAttempts < maxServerSwitchAttempts) {
+      serverSwitchTimer = setTimeout(() => {
+        serverSwitchTimer = null;
+        switchToConfiguredServer();
+      }, 5000);
+    } else {
+      console.warn(`[${bot.username}] Sent /server ${targetServer} ${maxServerSwitchAttempts} times but did not observe a confirmed server switch. Check the server's reply and proxy command permissions.`);
+    }
+  }, delay);
 }
 
 bot.once('spawn', () => {
