@@ -195,6 +195,7 @@ function parseCoordinates(value) {
 
 const state = { schematic: null, pos1: null, pos2: null, following: null };
 const pendingInventory = new Map();
+const digoutCompletions = new Map();
 let requestCounter = 0;
 
 function ownInventory() {
@@ -252,6 +253,17 @@ function sendInventoryReport(requestId) {
 function handleInternalMessage(username, message) {
   const parts = message.trim().split(/\s+/);
   if (parts[0] !== 'BuildersInternal') return false;
+
+  if (parts[1] === 'digout-worker-done' && parts.length === 4) {
+    const diggerName = parts[2];
+    const reportedWorker = parts[3];
+    if (reportedWorker.toLowerCase() === username.toLowerCase()) {
+      const key = diggerName.toLowerCase();
+      if (!digoutCompletions.has(key)) digoutCompletions.set(key, new Set());
+      digoutCompletions.get(key).add(reportedWorker.toLowerCase());
+    }
+    return true;
+  }
 
   if (username.toLowerCase() === coordinatorUsername.toLowerCase() &&
       parts[1] === 'digout-start' && parts.length === 5) {
@@ -561,6 +573,25 @@ async function runDigoutWorker(diggerName, targetY, dimensions) {
         }
       }
     }
+    // Tell the other workers this bot has finished mining, then wait for every
+    // assigned worker before lighting the floor so torches are not skipped on blocks
+    // that another bot has not cleared yet.
+    const digoutKey = diggerName.toLowerCase();
+    if (!digoutCompletions.has(digoutKey)) digoutCompletions.set(digoutKey, new Set());
+    digoutCompletions.get(digoutKey).add(bot.username.toLowerCase());
+    bot.chat(`BuildersInternal digout-worker-done ${diggerName} ${bot.username}`);
+    const expectedWorkers = workers.map((name) => name.toLowerCase());
+    const waitStarted = Date.now();
+    while (Date.now() - waitStarted < 600000) {
+      const done = digoutCompletions.get(digoutKey) || new Set();
+      if (expectedWorkers.every((name) => done.has(name))) break;
+      await waitMs(500);
+    }
+    const completedWorkers = digoutCompletions.get(digoutKey) || new Set();
+    if (!expectedWorkers.every((name) => completedWorkers.has(name))) {
+      console.warn(`[${bot.username}] Timed out waiting for all digout workers; placing torches only where floor is clear.`);
+    }
+
     // Place torches on the exposed floor in a grid after mining. Eight-block spacing
     // gives overlapping light coverage in ordinary open tunnels, but cannot guarantee
     // spawn-proofing in every version or on irregular terrain.
@@ -576,11 +607,14 @@ async function runDigoutWorker(diggerName, targetY, dimensions) {
           if (torchSlot % workers.length !== workerIndex) continue;
           const x = startX + xOffset;
           const z = startZ + zOffset;
-          const floor = bot.blockAt(new Vec3(x, targetY - 1, z));
-          const target = bot.blockAt(new Vec3(x, targetY, z));
+          let floor = bot.blockAt(new Vec3(x, targetY - 1, z));
+          let target = bot.blockAt(new Vec3(x, targetY, z));
           if (!floor || floor.boundingBox !== 'block' || !target || target.name !== 'air') continue;
           try {
             await bot.pathfinder.goto(new GoalNear(x, targetY, z, 3));
+            floor = bot.blockAt(new Vec3(x, targetY - 1, z));
+            target = bot.blockAt(new Vec3(x, targetY, z));
+            if (!floor || floor.boundingBox !== 'block' || !target || target.name !== 'air') continue;
             const torch = bot.inventory.items().find((item) => item.name === 'torch');
             if (!torch) break;
             await bot.equip(torch, 'hand');
