@@ -17,7 +17,7 @@ on:
         required: false
         type: string
       bot_username:
-        description: Optional: launch only this bot; leave blank to launch every BOT_CREDENTIALS bot
+        description: "Optional: launch only this bot; leave blank to launch every BOT_CREDENTIALS bot"
         required: false
         type: string
 
