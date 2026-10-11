@@ -480,7 +480,14 @@ async function handleCommand(rawMessage, username) {
   if (isInventoryCommand && bot.username.toLowerCase() !== coordinatorUsername.toLowerCase()) return;
 
   if (lower === 'help') {
-    reply('Commands: follow <playername> | rtp | digout <y> <width>x<height>x<depth> | schem list | schem set <name> | coords set1/set2 <x y z> | material list | holder <bot...> | build schem | say <message>');
+    reply('Commands: follow <playername> | tpa <playername> | rtp | digout <y> <width>x<height>x<depth> | schem list | schem set <name> | coords set1/set2 <x y z> | material list | holder <bot...> | build schem | say <message>');
+    return;
+  }
+  const tpaMatch = command.match(/^tpa\s+([a-z0-9_]{1,16})$/i);
+  if (tpaMatch) {
+    const targetName = tpaMatch[1];
+    bot.chat('/tpa ' + targetName);
+    console.log('[' + bot.username + '] Sent /tpa request to ' + targetName + '.');
     return;
   }
   const followMatch = command.match(/^follow\s+([a-z0-9_]{1,16})$/i);
@@ -506,6 +513,13 @@ async function handleCommand(rawMessage, username) {
       // Mineflayer look() takes radians. Yaw -179 degrees faces north (-Z);
       // pitch 0.6 degrees keeps the view nearly level.
       await bot.look(-179 * Math.PI / 180, 0.6 * Math.PI / 180, true);
+      const npc = bot.entityAtCursor(5);
+      if (npc) {
+        bot.activateEntity(npc);
+        console.log('[' + bot.username + '] Right-clicked the entity in view after RTP positioning.');
+      } else {
+        console.warn('[' + bot.username + '] No entity was targeted after RTP positioning; skipped NPC click.');
+      }
       reply('Reached 2 116 -8, facing north.');
     } catch (error) {
       console.error('[' + bot.username + '] RTP movement failed:', error.message);
