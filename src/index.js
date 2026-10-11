@@ -157,6 +157,11 @@ bot.on('error', (error) => console.error(`[${bot.username}] Minecraft bot error:
 bot.on('end', () => console.log(`[${bot.username}] Minecraft connection ended.`));
 
 function reply(message) {
+  // Only the coordinator bot may send command replies to public chat.
+  // Every bot can still process commands locally, but non-coordinators stay silent.
+  if (String(bot.username).toLowerCase() !== String(coordinatorUsername).toLowerCase()) {
+    return;
+  }
   bot.chat(String(message).slice(0, 240));
 }
 
