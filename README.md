@@ -1,35 +1,59 @@
 # BotBuilders
-Ai created Bots for servers that load a litematica file and build it.
 
-what this should do:
-use a public minecraft bot creation library that will let us put litematica files in a Input/ folder in the repo, run it with a github action and it should let you pick a server ip (cracked), the bot username and password (it should detect in chat the commander username which we set as a github repo secret (it should detect disguised messages aswell and any custom text in a message so it dosnt mess it up) allow these commands in chat from the commander:
+Minecraft bots that can inspect schematic files, plan builds, gather/check materials, and construct them from commander chat commands.
 
+## Current status
 
-Builders schem set
-Sets the builders schematics to the specified one.
+The initial Node.js/Mineflayer scaffold is in place. It connects to a server, checks the sender of chat commands against a configured commander username, lists schematic files, selects a file, stores two coordinates, and supports a basic `say` command. **Actual schematic parsing, material accounting, and block placement are not implemented yet.** The bot deliberately refuses to claim a build is ready until those systems exist.
 
-Builders coords set1 
-Sets the first coordinate for the builder
+## Requirements
 
-Builders coords set2
-Sets the second coordinate for the build (the builders should check the size of the schematic and if there isnt enough space they should tell the user that)
+- Node.js 20+
+- A Minecraft server the operator is authorized to use, reachable from the GitHub Actions runner
+- GitHub Actions enabled for the repository
 
-Builders material list
-List the materials for the selected schematic in chat (in shulker boxes, like if it needs 1728 pieces of sand (27 stacks) it says 1 shulker. etc etc) and it shouldnt mention any materials that they already have. also if they dont have tools they should ask for them (diamond tools or better)
+## Configure GitHub Actions
 
-Builders schem list
-will list all schematic names in chat
+In repository **Settings → Secrets and variables → Actions**, add:
 
-Builders say message
-makes builders say messages in chat
+- `MC_USERNAME`: bot's in-game username
+- `COMMANDER_USERNAME`: exact in-game username allowed to control the bot
+- `MC_AUTH` (optional): Mineflayer authentication mode; defaults to `offline` for offline-mode servers
 
-Builders build schem 
-builds the schematic listed (checks if they have the materials in the inventory, in bundles or in shulkers if not tell the user and deny if yes place the shulkers in a nearby spot, list the shulkers coords and what they contain so if they run out of said material later on they can go get it) 
+Run **Actions → Run BotBuilders → Run workflow**, then enter the server host, port, and optionally the Minecraft version. Do not put passwords or tokens in workflow inputs, commit them to the repository, or send them in chat. Offline-mode servers typically do not use a Minecraft account password; servers with an authentication plugin may require a separate, server-specific login flow.
 
-Builders help
-list all commands they have
+GitHub-hosted runners are temporary and their outbound network access may not work with every server. The workflow has a six-hour job limit and stops when the job ends.
 
+## Schematic files
 
-also make them parkour aware/ask for extra/spare blocks so if they need to reach something else they can (say dirt to build up. dirt being the extra block they should use)
+Put supported files in `Input/`. The starter can list `.schem`, `.schematic`, and `.litematic` filenames, but this is **not** the same as being able to parse or build them. Litematica's `.litematic` format needs a compatible parser or conversion step; support will be added before enabling real builds.
 
-improve this idea in ways you see fit etc etc
+## Chat commands
+
+Commands are accepted only when the chat event's sender username exactly matches `COMMANDER_USERNAME`.
+
+- `Builders help` — show command list
+- `Builders schem list` — list files in `Input/`
+- `Builders schem set <filename>` — select an existing file
+- `Builders coords set1 <x y z>` — set first corner
+- `Builders coords set2 <x y z>` — set second corner
+- `Builders material list` — planned; currently reports that material accounting is not implemented
+- `Builders build schem` — planned; currently disabled until validation and placement are implemented
+- `Builders say <message>` — send a message to public chat
+
+## Build roadmap
+
+1. **Schematic adapter:** parse dimensions, palette, block states, and required counts; validate Litematica support or document a reliable conversion workflow.
+2. **Placement validation:** verify both corners, orientation, world height, bounding-box dimensions, and loaded/accessible space before moving blocks.
+3. **Inventory and supply planning:** count inventory, bundles, and shulker contents; account for tool requirements and spare traversal blocks; report shortages before starting.
+4. **Build executor:** place blocks in a safe order, pathfind around obstacles, track progress, and recover from interruptions without silently duplicating work.
+5. **Supply staging:** stage clearly labeled shulkers only after the plan is validated; report coordinates and contents, and avoid overwriting existing blocks without explicit approval.
+6. **Chat hardening:** support server-specific disguised/system messages only through tested parsers; ignore messages whose sender cannot be authenticated, rate-limit commands, and avoid treating arbitrary chat text as authority.
+7. **Tests and CI:** unit-test parsing, inventory arithmetic, coordinate bounds, command authorization, and dry-run plans before allowing real placement.
+
+## Safety and reliability notes
+
+- Test on a private or disposable world first. Building can alter or replace world blocks.
+- The bot should default to a dry-run plan until schematic parsing, bounds checks, and material checks pass.
+- Never trust a username-looking string inside a message as the sender identity. Disguised chat formats must be explicitly parsed and tested for the target server.
+- Do not store credentials in source files or logs.
