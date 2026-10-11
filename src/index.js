@@ -510,9 +510,8 @@ async function handleCommand(rawMessage, username) {
     try {
       bot.pathfinder.setGoal(null);
       await bot.pathfinder.goto(new GoalBlock(2, 116, -8));
-      // Mineflayer look() takes radians. Yaw -179 degrees faces north (-Z);
-      // pitch 0.6 degrees keeps the view nearly level.
-      await bot.look(-179 * Math.PI / 180, 0.6 * Math.PI / 180, true);
+      // Mineflayer look() takes radians. Yaw 0 faces south (+Z); pitch 0 keeps the view level.
+      await bot.look(0, 0, true);
       const npc = bot.entityAtCursor(5);
       if (npc) {
         await bot.activateEntity(npc);
@@ -520,12 +519,12 @@ async function handleCommand(rawMessage, username) {
         // Server-side NPC/plugin interactions can overwrite the bot's rotation.
         // Reapply north-facing, level view after the interaction has had time to run.
         await waitMs(1200);
-        await bot.look(-Math.PI, 0, true);
-        console.log('[' + bot.username + '] Reapplied north-facing yaw and level pitch after NPC interaction.');
+        await bot.look(0, 0, true);
+        console.log('[' + bot.username + '] Reapplied south-facing yaw and level pitch after NPC interaction.');
       } else {
         console.warn('[' + bot.username + '] No entity was targeted after RTP positioning; skipped NPC click.');
       }
-      reply('Reached 2 116 -8; facing north after NPC interaction.');
+      reply('Reached 2 116 -8; facing south after NPC interaction.');
     } catch (error) {
       console.error('[' + bot.username + '] RTP movement failed:', error.message);
       reply('RTP movement failed for ' + bot.username + '; check the bot log.');
