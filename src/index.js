@@ -72,6 +72,17 @@ bot.loadPlugin(pathfinder);
 
 let hasSpawned = false;
 let loginConfirmed = false;
+let actionGeneration = 0;
+function actionWasStopped(generation) { return generation !== actionGeneration; }
+function stopAllActions() {
+  actionGeneration += 1;
+  state.following = null;
+  try { bot.pathfinder.setGoal(null); } catch (_) {}
+  try { bot.stopDigging(); } catch (_) {}
+  try { bot.clearControlStates(); } catch (_) {}
+  console.warn(`[${bot.username}] Stop command received; active movement and digging cancelled.`);
+}
+
 let serverSwitchAttempts = 0;
 let serverSwitchTimer = null;
 const maxServerSwitchAttempts = 3;
@@ -103,7 +114,13 @@ function switchToConfiguredServer() {
 
 bot.once('spawn', () => {
   hasSpawned = true;
-  bot.pathfinder.setMovements(new Movements(bot));
+  const movements = new Movements(bot);
+  // Pathfinder already handles single-block step-ups; parkour/sprinting helps
+  // it choose jump routes over small gaps when ordinary walking is blocked.
+  movements.allowParkour = true;
+  movements.allowSprinting = true;
+  movements.allow1by1towers = false;
+  bot.pathfinder.setMovements(movements);
   console.log(`[${bot.username}] Connected. Coordinator: ${coordinatorUsername}. Waiting for commander chat commands.`);
   switchToConfiguredServer();
 });
@@ -593,13 +610,14 @@ function warnDigoutHazard(diggerName, hazardPosition, kind) {
 }
 
 async function runDigoutDigger(targetY, dimensions) {
+  const generation = actionGeneration;
   state.following = null;
   normalizeInventoryEnchantments();
   bot.pathfinder.setGoal(null);
   try {
     await equipBestPickaxe();
     let steps = 0;
-    while (Math.floor(bot.entity.position.y) > targetY && steps < 256) {
+    while (!actionWasStopped(generation) && Math.floor(bot.entity.position.y) > targetY && steps < 256) {
       const feet = bot.entity.position;
       const below = bot.blockAt(new Vec3(Math.floor(feet.x), Math.floor(feet.y) - 1, Math.floor(feet.z)));
       if (!below || below.name === 'air') {
@@ -614,6 +632,7 @@ async function runDigoutDigger(targetY, dimensions) {
       }
       if (!bot.canDigBlock(below)) throw new Error(`Cannot dig block below bot: ${below.name}`);
       await bot.dig(below);
+      if (actionWasStopped(generation)) return;
       await waitMs(250);
       steps++;
     }
@@ -635,6 +654,7 @@ async function runDigoutDigger(targetY, dimensions) {
 }
 
 async function runDigoutWorker(diggerName, targetY, dimensions) {
+  const generation = actionGeneration;
   const workers = configuredBots.filter((name) => name.toLowerCase() !== diggerName.toLowerCase());
   const workerIndex = workers.findIndex((name) => name.toLowerCase() === bot.username.toLowerCase());
   if (workerIndex < 0 || workers.length === 0) return;
@@ -645,6 +665,7 @@ async function runDigoutWorker(diggerName, targetY, dimensions) {
     bot.chat(`/tpaccept ${diggerName}`);
     console.log(`[${bot.username}] Accepted teleport request from ${diggerName}; waiting for teleport.`);
     await waitMs(3500);
+    if (actionWasStopped(generation)) return;
 
     const centerX = Math.floor(bot.entity.position.x);
     const centerZ = Math.floor(bot.entity.position.z);
@@ -655,10 +676,10 @@ async function runDigoutWorker(diggerName, targetY, dimensions) {
     const warnedFluidKinds = new Set();
 
     // Split whole X-columns between workers to reduce duplicate digging.
-    for (let y = targetY + height - 1; y >= targetY; y--) {
-      for (let xOffset = 0; xOffset < width; xOffset++) {
+    for (let y = targetY + height - 1; y >= targetY && !actionWasStopped(generation); y--) {
+      for (let xOffset = 0; xOffset < width && !actionWasStopped(generation); xOffset++) {
         if (xOffset % workers.length !== workerIndex) continue;
-        for (let zOffset = 0; zOffset < depth; zOffset++) {
+        for (let zOffset = 0; zOffset < depth && !actionWasStopped(generation); zOffset++) {
           const x = startX + xOffset;
           const z = startZ + zOffset;
           let block = bot.blockAt(new Vec3(x, y, z));
@@ -874,6 +895,7 @@ function findTopEndstoneColumn(x, z, scanTop = 319, scanBottom = 0) {
 }
 
 async function mineEndIsland() {
+  const generation = actionGeneration;
   if (bot.username.toLowerCase() !== coordinatorUsername.toLowerCase()) return;
   state.following = null;
   bot.pathfinder.setGoal(null);
@@ -897,10 +919,11 @@ async function mineEndIsland() {
 
     // Discover reachable top-surface columns before mining. This avoids
     // confusing void or separate islands with the island currently occupied.
-    while (cursor < queue.length && columns.length < maxColumns) {
+    while (cursor < queue.length && columns.length < maxColumns && !actionWasStopped(generation)) {
       const current = queue[cursor++];
       columns.push(current);
       for (const [dx, dz] of directions) {
+        if (actionWasStopped(generation)) return;
         const x = current.x + dx;
         const z = current.z + dz;
         const key = x + ',' + z;
@@ -945,8 +968,9 @@ async function mineEndIsland() {
     let mined = 0;
     let skipped = 0;
     const highestY = Math.max(...columns.map((column) => column.topY));
-    for (let y = highestY; y > lowestY; y--) {
+    for (let y = highestY; y > lowestY && !actionWasStopped(generation); y--) {
       for (const column of columns) {
+        if (actionWasStopped(generation)) return;
         let block = bot.blockAt(new Vec3(column.x, y, column.z));
         if (!block || block.name !== 'end_stone') continue;
         try {
@@ -968,6 +992,7 @@ async function mineEndIsland() {
           await bot.equip(pickaxe, 'hand');
           normalizeInventoryEnchantments();
           await bot.dig(block);
+          if (actionWasStopped(generation)) return;
           mined++;
         } catch (error) {
           console.warn('[' + bot.username + '] End island could not mine ' + column.x + ' ' + y + ' ' + column.z + ': ' + error.message);
@@ -1066,8 +1091,13 @@ async function handleCommand(rawMessage, username) {
   const isInventoryCommand = lower === 'material list' || lower.startsWith('holder ');
   if (isInventoryCommand && bot.username.toLowerCase() !== coordinatorUsername.toLowerCase()) return;
 
+  if (lower === 'stop') {
+    stopAllActions();
+    reply('Stop requested: movement, digging, and active mining tasks cancelled for ' + bot.username + '.');
+    return;
+  }
   if (lower === 'help') {
-    reply('Commands: follow <playername> | tpa <playername> | rtp | gear | mine island | digout <y> <width>x<height>x<depth> | schem list | schem set <name> | coords set1/set2 <x y z> | material list | holder <bot...> | build schem | say <message>');
+    reply('Commands: stop | follow <playername> | tpa <playername> | rtp | gear | mine island | digout <y> <width>x<height>x<depth> | schem list | schem set <name> | coords set1/set2 <x y z> | material list | holder <bot...> | build schem | say <message>');
     return;
   }
   const tpaMatch = command.match(/^tpa\s+([a-z0-9_]{1,16})$/i);
@@ -1103,6 +1133,7 @@ async function handleCommand(rawMessage, username) {
     return;
   }
   if (lower === 'rtp') {
+    const generation = actionGeneration;
     state.following = null;
     try {
       bot.pathfinder.setGoal(null);
@@ -1118,7 +1149,9 @@ async function handleCommand(rawMessage, username) {
       const standX = targetPosition.x + slot[0];
       const standZ = targetPosition.z + slot[1];
       await bot.pathfinder.goto(new GoalBlock(standX, 116, standZ));
+      if (actionWasStopped(generation)) return;
       await waitMs(300);
+      if (actionWasStopped(generation)) return;
 
       const botNames = new Set(configuredBots.map((name) => name.toLowerCase()));
       const npc = Object.values(bot.entities)
@@ -1135,6 +1168,7 @@ async function handleCommand(rawMessage, username) {
 
       await bot.lookAt(npc.position.offset(0, Math.max(0.5, (npc.height || 1.8) * 0.8), 0), true);
       await waitMs(150);
+      if (actionWasStopped(generation)) return;
       await bot.activateEntity(npc);
       console.log('[' + bot.username + '] Looked at and right-clicked target from neighboring slot ' + standX + ' 116 ' + standZ + '.');
       reply('Clicked target from slot ' + standX + ' 116 ' + standZ + '.');
