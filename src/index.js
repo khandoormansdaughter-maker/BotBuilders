@@ -318,6 +318,162 @@ async function equipBestPickaxe() {
   return pickaxe;
 }
 
+const gearMaterialRank = ['netherite', 'diamond', 'iron', 'chainmail', 'golden', 'leather', 'turtle'];
+function gearItemPriority(item) {
+  const name = item.name;
+  const materialIndex = gearMaterialRank.findIndex((material) => name.startsWith(material + '_'));
+  return materialIndex < 0 ? 999 : materialIndex;
+}
+function isWantedGearItem(item) {
+  const name = item.name;
+  return /_(helmet|chestplate|leggings|boots)$/.test(name) ||
+    /_(pickaxe|axe)$/.test(name) ||
+    name === 'totem_of_undying' ||
+    name === 'golden_apple' ||
+    name === 'enchanted_golden_apple';
+}
+function findBestTool(toolType) {
+  const rank = toolType === 'pickaxe'
+    ? ['netherite_pickaxe', 'diamond_pickaxe', 'iron_pickaxe', 'stone_pickaxe', 'golden_pickaxe', 'wooden_pickaxe']
+    : ['netherite_axe', 'diamond_axe', 'iron_axe', 'stone_axe', 'golden_axe', 'wooden_axe'];
+  return bot.inventory.items()
+    .filter((item) => rank.includes(item.name))
+    .sort((a, b) => rank.indexOf(a.name) - rank.indexOf(b.name))[0] || null;
+}
+function nearbyShulkerPlacement() {
+  if (!bot.entity || !bot.entity.position) return null;
+  const floorY = Math.floor(bot.entity.position.y) - 1;
+  const baseX = Math.floor(bot.entity.position.x);
+  const baseZ = Math.floor(bot.entity.position.z);
+  const offsets = [
+    [2, 0], [-2, 0], [0, 2], [0, -2],
+    [2, 2], [-2, 2], [2, -2], [-2, -2],
+    [3, 0], [-3, 0], [0, 3], [0, -3],
+    [1, 2], [-1, 2], [1, -2], [-1, -2]
+  ];
+  const botIndex = Math.max(0, configuredBots.findIndex((name) => name.toLowerCase() === bot.username.toLowerCase()));
+  const ordered = offsets.slice(botIndex % offsets.length).concat(offsets.slice(0, botIndex % offsets.length));
+  for (const [dx, dz] of ordered) {
+    const support = bot.blockAt(new Vec3(baseX + dx, floorY, baseZ + dz));
+    const targetPos = new Vec3(baseX + dx, floorY + 1, baseZ + dz);
+    const target = bot.blockAt(targetPos);
+    if (support && support.boundingBox === 'block' && target && target.name === 'air') {
+      return { support, targetPos };
+    }
+  }
+  return null;
+}
+
+async function lootNearbyShulker() {
+  const shulker = bot.inventory.items().find((item) => /^(?:[a-z]+_)?shulker_box$/.test(item.name));
+  if (!shulker) return false;
+  const placement = nearbyShulkerPlacement();
+  if (!placement) {
+    console.warn(`[${bot.username}] Has a shulker box but no safe nearby floor spot to place it.`);
+    return false;
+  }
+
+  await bot.equip(shulker, 'hand');
+  await bot.placeBlock(placement.support, new Vec3(0, 1, 0));
+  await waitMs(350);
+  const placed = bot.blockAt(placement.targetPos);
+  if (!placed || !placed.name.endsWith('shulker_box')) {
+    throw new Error('Could not confirm the placed shulker box.');
+  }
+
+  let container;
+  try {
+    container = await bot.openContainer(placed);
+    const contents = container.containerItems().filter(isWantedGearItem);
+    let withdrawn = 0;
+    for (const item of contents) {
+      try {
+        await container.withdraw(item.type, item.metadata, item.count);
+        withdrawn += item.count;
+      } catch (error) {
+        console.warn(`[${bot.username}] Could not take all ${item.name} from shulker: ${error.message}`);
+      }
+    }
+    const remaining = container.containerItems();
+    container.close();
+    await waitMs(250);
+    if (remaining.length === 0) {
+      const currentBlock = bot.blockAt(placement.targetPos);
+      if (currentBlock && currentBlock.name.endsWith('shulker_box') && bot.canDigBlock(currentBlock)) {
+        await bot.dig(currentBlock);
+      }
+      console.log(`[${bot.username}] Looted ${withdrawn} item(s) from shulker and reclaimed the empty box if possible.`);
+    } else {
+      console.log(`[${bot.username}] Looted ${withdrawn} item(s); left the shulker placed because it still contains other items.`);
+    }
+    return true;
+  } catch (error) {
+    if (container) {
+      try { container.close(); } catch {}
+    }
+    throw error;
+  }
+}
+
+async function gearUp() {
+  state.following = null;
+  bot.pathfinder.setGoal(null);
+  let shulkerChecked = false;
+  if (bot.inventory.items().some((item) => /^(?:[a-z]+_)?shulker_box$/.test(item.name))) {
+    shulkerChecked = true;
+    try {
+      await lootNearbyShulker();
+    } catch (error) {
+      console.error(`[${bot.username}] Shulker looting failed:`, error.message);
+    }
+  }
+
+  const armorSlots = [
+    ['helmet', 'head'],
+    ['chestplate', 'torso'],
+    ['leggings', 'legs'],
+    ['boots', 'feet']
+  ];
+  for (const [suffix, destination] of armorSlots) {
+    const candidates = bot.inventory.items()
+      .filter((item) => item.name.endsWith('_' + suffix))
+      .sort((a, b) => gearItemPriority(a) - gearItemPriority(b));
+    if (candidates.length) {
+      try {
+        await bot.equip(candidates[0], destination);
+        console.log(`[${bot.username}] Equipped ${candidates[0].name} in ${destination}.`);
+      } catch (error) {
+        console.warn(`[${bot.username}] Could not equip ${candidates[0].name}: ${error.message}`);
+      }
+    }
+  }
+
+  const totem = bot.inventory.items().find((item) => item.name === 'totem_of_undying');
+  if (totem) {
+    try {
+      await bot.equip(totem, 'off-hand');
+      console.log(`[${bot.username}] Equipped totem of undying in off-hand.`);
+    } catch (error) {
+      console.warn(`[${bot.username}] Could not equip off-hand totem: ${error.message}`);
+    }
+  } else {
+    console.warn(`[${bot.username}] No totem of undying found in inventory or looted shulker.`);
+  }
+
+  const pickaxe = findBestTool('pickaxe');
+  if (pickaxe) {
+    await bot.equip(pickaxe, 'hand');
+    console.log(`[${bot.username}] Main hand set to ${pickaxe.name}.`);
+  } else {
+    console.warn(`[${bot.username}] No pickaxe found in inventory or looted shulker.`);
+  }
+  const axe = findBestTool('axe');
+  if (axe) console.log(`[${bot.username}] Has axe available: ${axe.name}.`);
+  const apples = bot.inventory.items().filter((item) => item.name === 'golden_apple' || item.name === 'enchanted_golden_apple')
+    .reduce((sum, item) => sum + item.count, 0);
+  console.log(`[${bot.username}] Gear check complete: ${apples} golden apple(s) carried; shulker checked: ${shulkerChecked}.`);
+}
+
 function waitMs(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -404,6 +560,40 @@ async function runDigoutWorker(diggerName, targetY, dimensions) {
           }
         }
       }
+    }
+    // Place torches on the exposed floor in a grid after mining. Eight-block spacing
+    // gives overlapping light coverage in ordinary open tunnels, but cannot guarantee
+    // spawn-proofing in every version or on irregular terrain.
+    const torchStacks = bot.inventory.items().filter((item) => item.name === 'torch');
+    if (torchStacks.length) {
+      const [widthForTorches, , depthForTorches] = dimensions;
+      const xOffsets = [...new Set([Math.min(1, widthForTorches - 1), Math.min(9, widthForTorches - 1)])];
+      const zOffsets = [...new Set([Math.min(1, depthForTorches - 1), Math.min(9, depthForTorches - 1)])];
+      let placedTorches = 0;
+      for (const xOffset of xOffsets) {
+        for (const zOffset of zOffsets) {
+          const torchSlot = xOffsets.indexOf(xOffset) * zOffsets.length + zOffsets.indexOf(zOffset);
+          if (torchSlot % workers.length !== workerIndex) continue;
+          const x = startX + xOffset;
+          const z = startZ + zOffset;
+          const floor = bot.blockAt(new Vec3(x, targetY - 1, z));
+          const target = bot.blockAt(new Vec3(x, targetY, z));
+          if (!floor || floor.boundingBox !== 'block' || !target || target.name !== 'air') continue;
+          try {
+            await bot.pathfinder.goto(new GoalNear(x, targetY, z, 3));
+            const torch = bot.inventory.items().find((item) => item.name === 'torch');
+            if (!torch) break;
+            await bot.equip(torch, 'hand');
+            await bot.placeBlock(floor, new Vec3(0, 1, 0));
+            placedTorches++;
+          } catch (error) {
+            console.warn(`[${bot.username}] Could not place torch at ${x} ${targetY} ${z}: ${error.message}`);
+          }
+        }
+      }
+      console.log(`[${bot.username}] Placed ${placedTorches} torch(es) in the digout floor grid.`);
+      const pickaxeAfterLighting = findBestTool('pickaxe');
+      if (pickaxeAfterLighting) await bot.equip(pickaxeAfterLighting, 'hand');
     }
     console.log(`[${bot.username}] Digout finished; mined ${mined} block(s) in assigned columns.`);
   } catch (error) {
@@ -492,7 +682,7 @@ async function handleCommand(rawMessage, username) {
   if (isInventoryCommand && bot.username.toLowerCase() !== coordinatorUsername.toLowerCase()) return;
 
   if (lower === 'help') {
-    reply('Commands: follow <playername> | tpa <playername> | rtp | digout <y> <width>x<height>x<depth> | schem list | schem set <name> | coords set1/set2 <x y z> | material list | holder <bot...> | build schem | say <message>');
+    reply('Commands: follow <playername> | tpa <playername> | rtp | gear | digout <y> <width>x<height>x<depth> | schem list | schem set <name> | coords set1/set2 <x y z> | material list | holder <bot...> | build schem | say <message>');
     return;
   }
   const tpaMatch = command.match(/^tpa\s+([a-z0-9_]{1,16})$/i);
@@ -515,6 +705,16 @@ async function handleCommand(rawMessage, username) {
     bot.pathfinder.setGoal(new GoalFollow(player.entity, 2), true);
     console.log(`[${bot.username}] Following player ${targetName}.`);
     reply(`Following ${targetName}.`);
+    return;
+  }
+  if (lower === 'gear') {
+    try {
+      await gearUp();
+      reply('Gear check finished for ' + bot.username + '.');
+    } catch (error) {
+      console.error('[' + bot.username + '] Gear command failed:', error);
+      reply('Gear command failed for ' + bot.username + '; check the bot log.');
+    }
     return;
   }
   if (lower === 'rtp') {
