@@ -673,6 +673,74 @@ async function runDigoutWorker(diggerName, targetY, dimensions) {
     }
     if (cleanupMined) console.log(`[${bot.username}] Cleanup pass removed ${cleanupMined} late/fallen block(s).`);
 
+    // Seal one-block-deep gaps immediately outside the excavation walls, but only
+    // where the target is air and a solid block behind it provides a placement face.
+    // Use only solid blocks already carried; never mine or replace the existing wall.
+    const perimeter = [];
+    const addPerimeterCell = (x, y, z, sx, sy, sz) => {
+      const key = `${x},${y},${z}`;
+      if (!perimeter.some((entry) => entry.key === key)) {
+        perimeter.push({ key, target: new Vec3(x, y, z), support: new Vec3(sx, sy, sz) });
+      }
+    };
+    for (let y = targetY; y < targetY + height; y++) {
+      for (let zOffset = 0; zOffset < depth; zOffset++) {
+        const z = startZ + zOffset;
+        addPerimeterCell(startX - 1, y, z, startX - 2, y, z);
+        addPerimeterCell(startX + width, y, z, startX + width + 1, y, z);
+      }
+      for (let xOffset = 0; xOffset < width; xOffset++) {
+        const x = startX + xOffset;
+        addPerimeterCell(x, y, startZ - 1, x, y, startZ - 2);
+        addPerimeterCell(x, y, startZ + depth, x, y, startZ + depth + 1);
+      }
+    }
+    const solidCarryBlocks = () => bot.inventory.items().filter((item) => {
+      const blockInfo = bot.registry.blocksByName[item.name];
+      return blockInfo && blockInfo.boundingBox === 'block' &&
+        !/^(?:sand|red_sand|gravel|anvil|chipped_anvil|damaged_anvil|pointed_dripstone|scaffolding|tnt|(?:.*_)?shulker_box)$/.test(item.name) &&
+        !['torch', 'soul_torch', 'redstone_torch', 'soul_lantern', 'lantern'].includes(item.name);
+    });
+    let sealedGaps = 0;
+    for (let index = workerIndex; index < perimeter.length; index += workers.length) {
+      let target = bot.blockAt(perimeter[index].target);
+      if (!target || !['air', 'cave_air', 'void_air'].includes(target.name)) continue;
+      const hazard = fluidHazardAt(perimeter[index].target);
+      if (hazard) {
+        if (!warnedFluidKinds.has(hazard.kind)) {
+          warnedFluidKinds.add(hazard.kind);
+          warnDigoutHazard(diggerName, hazard.position, hazard.kind);
+        }
+        continue;
+      }
+      let support = bot.blockAt(perimeter[index].support);
+      if (!support || support.boundingBox !== 'block') continue;
+      let blockItems = solidCarryBlocks();
+      if (!blockItems.length) break;
+      try {
+        await bot.pathfinder.goto(new GoalNear(
+          perimeter[index].target.x, perimeter[index].target.y, perimeter[index].target.z, 3
+        ));
+        target = bot.blockAt(perimeter[index].target);
+        support = bot.blockAt(perimeter[index].support);
+        if (!target || !['air', 'cave_air', 'void_air'].includes(target.name) ||
+            !support || support.boundingBox !== 'block' ||
+            fluidHazardAt(perimeter[index].target)) continue;
+        blockItems = solidCarryBlocks();
+        if (!blockItems.length) break;
+        await bot.equip(blockItems[0], 'hand');
+        const face = perimeter[index].target.minus(perimeter[index].support);
+        await bot.placeBlock(support, face);
+        sealedGaps++;
+      } catch (error) {
+        console.warn(`[${bot.username}] Could not seal perimeter gap at ${perimeter[index].target}: ${error.message}`);
+      }
+    }
+    if (sealedGaps) console.log(`[${bot.username}] Sealed ${sealedGaps} outside-wall gap(s) using carried blocks.`);
+    else console.log(`[${bot.username}] No sealable outside-wall gaps found with current inventory and nearby support blocks.`);
+    const pickaxeAfterSealing = bestPickaxe();
+    if (pickaxeAfterSealing) await bot.equip(pickaxeAfterSealing, 'hand');
+
     // Tell the other workers this bot has finished mining, then wait for every
     // assigned worker before lighting the floor so torches are not skipped on blocks
     // that another bot has not cleared yet.
