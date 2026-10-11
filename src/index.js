@@ -322,7 +322,7 @@ function handleInternalMessage(username, message) {
       username.toLowerCase() === coordinatorUsername.toLowerCase()) {
     const runId = parts[2];
     const columns = islandMappedColumns.get(runId);
-    if (columns && activeIslandMapRun === runId) void mineIslandTopLayer(runId, columns);
+    if (columns) void mineIslandTopLayer(runId, columns);
     return true;
   }
 
@@ -339,6 +339,8 @@ function handleInternalMessage(username, message) {
       console.log('[' + bot.username + '] Island map completion reports: ' + done.size + '/' + configuredBots.length + '.');
       if (configuredBots.every((name) => done.has(name.toLowerCase()))) {
         reply('fully mapped');
+        const localColumns = islandMappedColumns.get(runId);
+        if (localColumns) void mineIslandTopLayer(runId, localColumns);
         bot.chat('BuildersInternal island-map-mine-top ' + runId);
         islandMapCompletions.delete(runId);
         activeIslandMapRun = null;
