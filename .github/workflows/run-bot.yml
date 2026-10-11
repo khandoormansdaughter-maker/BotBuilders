@@ -1,0 +1,45 @@
+name: Run BotBuilders
+
+on:
+  workflow_dispatch:
+    inputs:
+      server_host:
+        description: Minecraft server hostname or IP
+        required: true
+        type: string
+      server_port:
+        description: Minecraft server port
+        required: true
+        default: "25565"
+        type: string
+      minecraft_version:
+        description: Minecraft version (leave blank for auto-detect)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+      - name: Start bot
+        env:
+          MC_HOST: ${{ inputs.server_host }}
+          MC_PORT: ${{ inputs.server_port }}
+          MC_VERSION: ${{ inputs.minecraft_version }}
+          MC_USERNAME: ${{ secrets.MC_USERNAME }}
+          MC_AUTH: ${{ secrets.MC_AUTH }}
+          COMMANDER_USERNAME: ${{ secrets.COMMANDER_USERNAME }}
+        run: npm start
