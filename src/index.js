@@ -97,9 +97,10 @@ bot.on('messagestr', (message, position, jsonMsg, senderUuid) => {
   if (position === 'chat') {
     // Some server chat formats appear in messagestr but do not trigger Mineflayer's
     // parsed 'chat' event. Resolve the sender UUID through the player list as a fallback.
-    const senderEntry = senderUuid
+    const normalizedSenderUuid = String(senderUuid || '').replace(/-/g, '').toLowerCase();
+    const senderEntry = normalizedSenderUuid
       ? Object.entries(bot.players).find(([, player]) =>
-          player.uuid && String(player.uuid).toLowerCase() === String(senderUuid).toLowerCase())
+          player.uuid && String(player.uuid).replace(/-/g, '').toLowerCase() === normalizedSenderUuid)
       : null;
     if (senderEntry) {
       dispatchChatCommand(senderEntry[0], text, 'messagestr');
