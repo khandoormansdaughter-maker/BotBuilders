@@ -923,46 +923,41 @@ async function handleCommand(rawMessage, username) {
     state.following = null;
     try {
       bot.pathfinder.setGoal(null);
-      // Spread bots along the X axis so they do not stack inside one another.
+      const targetPosition = new Vec3(2, 116, -9);
+      // Assign each bot a unique neighboring block around the NPC, not a line
+      // two blocks apart. Eight surrounding slots allow bots to approach closely.
+      const ring = [
+        [-1, 0], [1, 0], [0, -1], [0, 1],
+        [-1, -1], [1, -1], [-1, 1], [1, 1]
+      ];
       const botIndex = configuredBots.findIndex((name) => name.toLowerCase() === bot.username.toLowerCase());
-      const slotOffset = botIndex < 0 ? 0 : Math.round((botIndex - (configuredBots.length - 1) / 2) * 2);
-      const standX = 2 + slotOffset;
-      const standZ = -8;
+      const slot = ring[(botIndex < 0 ? 0 : botIndex) % ring.length];
+      const standX = targetPosition.x + slot[0];
+      const standZ = targetPosition.z + slot[1];
       await bot.pathfinder.goto(new GoalBlock(standX, 116, standZ));
+      await waitMs(300);
 
-      // Yaw 0 faces south (+Z). Aim at the NPC itself from each bot's separate slot.
-      await bot.look(0, 0, true);
-      let npc = bot.entityAtCursor(5);
+      const botNames = new Set(configuredBots.map((name) => name.toLowerCase()));
+      const npc = Object.values(bot.entities)
+        .filter((entity) => entity && entity !== bot.entity && entity.position &&
+          !(entity.username && botNames.has(entity.username.toLowerCase())) &&
+          entity.position.distanceTo(targetPosition) <= 2)
+        .sort((left, right) => left.position.distanceTo(targetPosition) - right.position.distanceTo(targetPosition))[0];
+
       if (!npc) {
-        const botNames = new Set(configuredBots.map((name) => name.toLowerCase()));
-        const standPosition = new Vec3(2, 116, -8);
-        const candidates = Object.values(bot.entities)
-          .filter((entity) => entity && entity !== bot.entity && entity.position &&
-            entity.position.z > standZ &&
-            entity.position.distanceTo(standPosition) <= 7 &&
-            !(entity.username && botNames.has(entity.username.toLowerCase())))
-          .sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position));
-        if (candidates.length) {
-          const target = candidates[0];
-          await bot.lookAt(target.position.offset(0, Math.max(0.5, (target.height || 1.8) * 0.8), 0), true);
-          npc = bot.entityAtCursor(5);
-        }
+        console.warn('[' + bot.username + '] No non-bot entity found at target 2 116 -9; skipped click.');
+        reply('Could not see the target NPC for ' + bot.username + '.');
+        return;
       }
 
-      if (npc) {
-        await bot.activateEntity(npc);
-        console.log('[' + bot.username + '] Right-clicked the entity from slot X=' + standX + '.');
-        // Give the server-side NPC/plugin interaction time to run, then restore level south-facing view.
-        await waitMs(1200);
-        await bot.look(0, 0, true);
-        console.log('[' + bot.username + '] Reapplied south-facing yaw and level pitch after NPC interaction.');
-      } else {
-        console.warn('[' + bot.username + '] No entity was targeted from slot X=' + standX + '; skipped NPC click.');
-      }
-      reply('Reached RTP click position X=' + standX + ', Y=116, Z=' + standZ + '.');
+      await bot.lookAt(npc.position.offset(0, Math.max(0.5, (npc.height || 1.8) * 0.8), 0), true);
+      await waitMs(150);
+      await bot.activateEntity(npc);
+      console.log('[' + bot.username + '] Looked at and right-clicked target from neighboring slot ' + standX + ' 116 ' + standZ + '.');
+      reply('Clicked target from slot ' + standX + ' 116 ' + standZ + '.');
     } catch (error) {
-      console.error('[' + bot.username + '] RTP movement failed:', error.message);
-      reply('RTP movement failed for ' + bot.username + '; check the bot log.');
+      console.error('[' + bot.username + '] RTP movement/click failed:', error.message);
+      reply('RTP movement/click failed for ' + bot.username + '; check the bot log.');
     }
     return;
   }
