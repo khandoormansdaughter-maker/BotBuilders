@@ -254,6 +254,23 @@ function handleInternalMessage(username, message) {
   const parts = message.trim().split(/\s+/);
   if (parts[0] !== 'BuildersInternal') return false;
 
+  if (parts[1] === 'digout-warning' && parts.length === 8) {
+    const diggerName = parts[2];
+    const reporter = parts[3];
+    const x = Number(parts[4]);
+    const y = Number(parts[5]);
+    const z = Number(parts[6]);
+    const kind = parts[7];
+    if (reporter.toLowerCase() === username.toLowerCase() &&
+        configuredBots.some((name) => name.toLowerCase() === username.toLowerCase()) &&
+        Number.isInteger(x) && Number.isInteger(y) && Number.isInteger(z) &&
+        (kind === 'water' || kind === 'lava') &&
+        bot.username.toLowerCase() === diggerName.toLowerCase()) {
+      reply(`Digout warning: ${kind} detected near ${x} ${y} ${z}; nearby blocks are being left intact.`);
+    }
+    return true;
+  }
+
   if (parts[1] === 'digout-worker-done' && parts.length === 4) {
     const diggerName = parts[2];
     const reportedWorker = parts[3];
@@ -490,6 +507,34 @@ function waitMs(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function fluidKind(block) {
+  if (!block) return null;
+  if (block.name === 'water' || block.name.includes('water')) return 'water';
+  if (block.name === 'lava' || block.name.includes('lava')) return 'lava';
+  return null;
+}
+
+function fluidHazardAt(position) {
+  const directions = [
+    [0, 0, 0], [1, 0, 0], [-1, 0, 0],
+    [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]
+  ];
+  for (const [dx, dy, dz] of directions) {
+    const block = bot.blockAt(position.offset(dx, dy, dz));
+    const kind = fluidKind(block);
+    if (kind) return { kind, position: position.offset(dx, dy, dz) };
+  }
+  return null;
+}
+
+function warnDigoutHazard(diggerName, hazardPosition, kind) {
+  const x = Math.floor(hazardPosition.x);
+  const y = Math.floor(hazardPosition.y);
+  const z = Math.floor(hazardPosition.z);
+  console.warn(`[${bot.username}] Digout avoiding ${kind} near ${x} ${y} ${z}.`);
+  bot.chat(`BuildersInternal digout-warning ${diggerName} ${bot.username} ${x} ${y} ${z} ${kind}`);
+}
+
 async function runDigoutDigger(targetY, dimensions) {
   state.following = null;
   bot.pathfinder.setGoal(null);
@@ -504,7 +549,11 @@ async function runDigoutDigger(targetY, dimensions) {
         steps++;
         continue;
       }
-      if (below.name.includes('lava')) throw new Error('Lava detected below; stopping to avoid digging into it.');
+      const descentHazard = fluidHazardAt(below.position);
+      if (descentHazard) {
+        warnDigoutHazard(bot.username, descentHazard.position, descentHazard.kind);
+        throw new Error(`${descentHazard.kind} detected near the descent shaft; stopping rather than opening it.`);
+      }
       if (!bot.canDigBlock(below)) throw new Error(`Cannot dig block below bot: ${below.name}`);
       await bot.dig(below);
       await waitMs(250);
@@ -545,6 +594,7 @@ async function runDigoutWorker(diggerName, targetY, dimensions) {
     const startX = centerX - Math.floor(width / 2);
     const startZ = centerZ - Math.floor(depth / 2);
     let mined = 0;
+    const warnedFluidKinds = new Set();
 
     // Split whole X-columns between workers to reduce duplicate digging.
     for (let y = targetY + height - 1; y >= targetY; y--) {
@@ -559,8 +609,12 @@ async function runDigoutWorker(diggerName, targetY, dimensions) {
             await bot.pathfinder.goto(new GoalNear(x, y, z, 3));
             block = bot.blockAt(new Vec3(x, y, z));
             if (!block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air') continue;
-            if (block.name.includes('lava')) {
-              console.warn(`[${bot.username}] Skipping lava block at ${x} ${y} ${z}.`);
+            const hazard = fluidHazardAt(block.position);
+            if (hazard) {
+              if (!warnedFluidKinds.has(hazard.kind)) {
+                warnedFluidKinds.add(hazard.kind);
+                warnDigoutHazard(diggerName, hazard.position, hazard.kind);
+              }
               continue;
             }
             if (!bot.canDigBlock(block)) continue;
@@ -573,6 +627,52 @@ async function runDigoutWorker(diggerName, targetY, dimensions) {
         }
       }
     }
+    // Re-scan the intended excavation volume twice to clear blocks that fell or
+    // appeared after their column was first mined. Fluids and their immediate neighbors
+    // are protected; those blocks are reported and left alone.
+    let cleanupMined = 0;
+    for (let pass = 0; pass < 2; pass++) {
+      for (let y = targetY + height - 1; y >= targetY; y--) {
+        for (let xOffset = 0; xOffset < width; xOffset++) {
+          if (xOffset % workers.length !== workerIndex) continue;
+          for (let zOffset = 0; zOffset < depth; zOffset++) {
+            const x = startX + xOffset;
+            const z = startZ + zOffset;
+            let block = bot.blockAt(new Vec3(x, y, z));
+            if (!block || ['air', 'cave_air', 'void_air'].includes(block.name)) continue;
+            const hazard = fluidHazardAt(block.position);
+            if (hazard) {
+              if (!warnedFluidKinds.has(hazard.kind)) {
+                warnedFluidKinds.add(hazard.kind);
+                warnDigoutHazard(diggerName, hazard.position, hazard.kind);
+              }
+              continue;
+            }
+            try {
+              await bot.pathfinder.goto(new GoalNear(x, y, z, 3));
+              block = bot.blockAt(new Vec3(x, y, z));
+              if (!block || ['air', 'cave_air', 'void_air'].includes(block.name)) continue;
+              const recheckHazard = fluidHazardAt(block.position);
+              if (recheckHazard) {
+                if (!warnedFluidKinds.has(recheckHazard.kind)) {
+                  warnedFluidKinds.add(recheckHazard.kind);
+                  warnDigoutHazard(diggerName, recheckHazard.position, recheckHazard.kind);
+                }
+                continue;
+              }
+              if (!bot.canDigBlock(block)) continue;
+              await bot.equip(bestPickaxe(), 'hand');
+              await bot.dig(block);
+              cleanupMined++;
+            } catch (error) {
+              console.warn(`[${bot.username}] Cleanup pass could not clear ${x} ${y} ${z}: ${error.message}`);
+            }
+          }
+        }
+      }
+    }
+    if (cleanupMined) console.log(`[${bot.username}] Cleanup pass removed ${cleanupMined} late/fallen block(s).`);
+
     // Tell the other workers this bot has finished mining, then wait for every
     // assigned worker before lighting the floor so torches are not skipped on blocks
     // that another bot has not cleared yet.
