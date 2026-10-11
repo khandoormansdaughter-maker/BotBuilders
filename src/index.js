@@ -15,7 +15,7 @@ for (const key of required) {
 const port = Number(process.env.MC_PORT || 25565);
 const version = process.env.MC_VERSION || false;
 const inputDir = path.resolve(process.env.SCHEMATIC_DIR || 'Input');
-const coordinatorUsername = process.env.BOT_COORDINATOR_USERNAME || process.env.MC_USERNAME;
+let coordinatorUsername;
 
 // BOT_CREDENTIALS is a repository Actions secret with one "username/password"
 // pair per line. Passwords are never printed to logs.
@@ -49,6 +49,7 @@ function loadBotCredentials(raw) {
 }
 
 const botCredentials = loadBotCredentials(process.env.BOT_CREDENTIALS);
+coordinatorUsername = process.env.BOT_COORDINATOR_USERNAME || [...botCredentials.keys()][0] || process.env.MC_USERNAME;
 const configuredBots = (process.env.BOT_GROUP || [...botCredentials.keys()].join(',') || process.env.MC_USERNAME)
   .split(',').map((name) => name.trim()).filter(Boolean);
 const bot = mineflayer.createBot({
