@@ -15,6 +15,9 @@ for (const key of required) {
 const port = Number(process.env.MC_PORT || 25565);
 const version = process.env.MC_VERSION || false;
 const inputDir = path.resolve(process.env.SCHEMATIC_DIR || 'Input');
+const coordinatorUsername = process.env.BOT_COORDINATOR_USERNAME || process.env.MC_USERNAME;
+const configuredBots = (process.env.BOT_GROUP || process.env.MC_USERNAME)
+  .split(',').map((name) => name.trim()).filter(Boolean);
 const bot = mineflayer.createBot({
   host: process.env.MC_HOST,
   port,
@@ -37,7 +40,6 @@ bot.on('error', (error) => console.error('Minecraft bot error:', error));
 bot.on('end', () => console.log('Minecraft connection ended.'));
 
 function reply(message) {
-  // Keep responses short enough for ordinary Minecraft chat.
   bot.chat(String(message).slice(0, 240));
 }
 
@@ -63,10 +65,117 @@ const state = {
   schematic: null,
   pos1: null,
   pos2: null,
-  spareBlock: null,
 };
+const pendingInventory = new Map();
+let requestCounter = 0;
 
-async function reportMaterials() {
+function ownInventory() {
+  const counts = new Map();
+  for (const item of bot.inventory.items()) {
+    counts.set(item.name, (counts.get(item.name) || 0) + item.count);
+  }
+  return counts;
+}
+
+function requestInventory(botNames, timeoutMs = 5000) {
+  const uniqueNames = [...new Set(botNames)].filter(Boolean);
+  const requestId = `${Date.now().toString(36)}${(++requestCounter).toString(36)}`;
+  const request = { expected: new Set(uniqueNames), reports: new Map(), resolve: null };
+  const result = new Promise((resolve) => { request.resolve = resolve; });
+  pendingInventory.set(requestId, request);
+
+  if (uniqueNames.some((name) => name.toLowerCase() === bot.username.toLowerCase())) {
+    request.reports.set(bot.username, ownInventory());
+    request.expected.delete(bot.username);
+  }
+  for (const name of request.expected) {
+    bot.chat(`BuildersInternal inventory-request ${requestId} ${name}`);
+  }
+
+  setTimeout(() => {
+    if (!pendingInventory.has(requestId)) return;
+    pendingInventory.delete(requestId);
+    request.resolve({ reports: request.reports, missing: [...request.expected].filter((name) => !request.reports.has(name)) });
+  }, timeoutMs);
+  return result;
+}
+
+function sendInventoryReport(requestId) {
+  const counts = ownInventory();
+  for (const [name, count] of counts) {
+    // Registry item names contain no spaces, so each report fits in chat.
+    bot.chat(`BuildersInternal inventory-item ${requestId} ${bot.username} ${name} ${count}`);
+  }
+  bot.chat(`BuildersInternal inventory-done ${requestId} ${bot.username}`);
+}
+
+function handleInternalMessage(username, message) {
+  const parts = message.trim().split(/\s+/);
+  if (parts[0] !== 'BuildersInternal') return false;
+
+  if (username === coordinatorUsername && parts[1] === 'inventory-request' && parts.length === 4) {
+    const [, , requestId, target] = parts;
+    if (target.toLowerCase() === bot.username.toLowerCase()) sendInventoryReport(requestId);
+    return true;
+  }
+
+  if (username !== username.trim()) return true;
+  const requestId = parts[2];
+  const request = pendingInventory.get(requestId);
+  if (!request || !request.expected.has(username)) return true;
+
+  if (parts[1] === 'inventory-item' && parts.length === 6) {
+    const [, , , reportedBot, itemName, rawCount] = parts;
+    const count = Number(rawCount);
+    if (reportedBot.toLowerCase() !== username.toLowerCase() || !Number.isSafeInteger(count) || count < 0) return true;
+    if (!request.reports.has(username)) request.reports.set(username, new Map());
+    const inventory = request.reports.get(username);
+    inventory.set(itemName, (inventory.get(itemName) || 0) + count);
+    return true;
+  }
+
+  if (parts[1] === 'inventory-done' && parts.length === 4) {
+    const reportedBot = parts[3];
+    if (reportedBot.toLowerCase() !== username.toLowerCase()) return true;
+    if (!request.reports.has(username)) request.reports.set(username, new Map());
+    request.expected.delete(username);
+    if (request.expected.size === 0) {
+      pendingInventory.delete(requestId);
+      request.resolve({ reports: request.reports, missing: [] });
+    }
+    return true;
+  }
+  return true;
+}
+
+function combineInventories(reports) {
+  const combined = new Map();
+  for (const inventory of reports.values()) {
+    for (const [item, count] of inventory) combined.set(item, (combined.get(item) || 0) + count);
+  }
+  return combined;
+}
+
+async function showInventory(botNames) {
+  const names = [...new Set(botNames)];
+  const { reports, missing } = await requestInventory(names);
+  const combined = combineInventories(reports);
+  if (reports.size === 0) {
+    reply('No inventory reports received. Check that the named bots are online and configured with the same coordinator username.');
+    return;
+  }
+
+  reply(`Inventory reports: ${[...reports.keys()].join(', ')}.`);
+  for (const [name, inventory] of reports) {
+    const entries = [...inventory.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([item, count]) => `${item} x${count}`);
+    reply(`${name}: ${entries.length ? entries.join(', ') : 'inventory empty'}`);
+  }
+  const totals = [...combined.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([item, count]) => `${item} x${count}`);
+  reply(`Combined total: ${totals.length ? totals.join(', ') : 'empty'}`);
+  if (missing.length) reply(`No response from: ${missing.join(', ')}`);
+}
+
+async function reportMaterials(botNames = configuredBots) {
   if (!state.schematic) {
     reply('Choose a schematic first: Builders schem set <name>.');
     return;
@@ -78,17 +187,22 @@ async function reportMaterials() {
 
   try {
     const data = await loadLitematic(path.join(inputDir, state.schematic));
-    const stackSlots = data.materials.reduce((sum, item) => sum + Math.ceil(item.count / 64), 0);
-    const shulkers = Math.ceil(stackSlots / 27);
-    const lines = [
-      `Materials for ${state.schematic}: ${data.blockCount} non-air blocks.`,
-      `Regions: ${data.regions.length}; rough estimate: ${stackSlots} stacks / ${shulkers} shulker boxes (64-item stacks).`,
-    ];
-    const entries = data.materials.map((item) => `${item.block.replace(/^minecraft:/, '')} x${item.count}`);
-    for (let i = 0; i < entries.length; i += 4) {
-      lines.push(entries.slice(i, i + 4).join(', '));
+    reply(`Materials for ${state.schematic}: ${data.blockCount} non-air blocks.`);
+    const { reports, missing } = await requestInventory(botNames);
+    const combined = combineInventories(reports);
+    const entries = data.materials.map((item) => {
+      const normalized = item.block.replace(/^minecraft:/, '');
+      const available = combined.get(normalized) || combined.get(item.block) || 0;
+      const deficit = Math.max(0, item.count - available);
+      return { name: normalized, needed: item.count, available, deficit };
+    });
+    const shortageCount = entries.filter((item) => item.deficit > 0).length;
+    reply(`Inventory checked: ${[...reports.keys()].join(', ') || 'none'}; ${shortageCount} material types short.`);
+    for (let i = 0; i < entries.length; i += 3) {
+      reply(entries.slice(i, i + 3).map((item) => `${item.name} need ${item.needed}, have ${item.available}, short ${item.deficit}`).join(' | '));
     }
-    replyLines(lines);
+    if (missing.length) reply(`Could not check offline/unresponsive bots: ${missing.join(', ')}`);
+    reply('Counts use bot player inventories only; shulker contents, chests, item variants, tools, and stack limits are not included.');
   } catch (error) {
     console.error('Could not read selected Litematica file:', error);
     reply('Could not read that .litematic file. Check the file format; details are in the bot log.');
@@ -96,19 +210,24 @@ async function reportMaterials() {
 }
 
 async function handleCommand(rawMessage, username) {
+  const message = rawMessage.trim();
+  if (message.startsWith('BuildersInternal ')) {
+    handleInternalMessage(username, message);
+    return;
+  }
+
   // Only the configured commander can issue actions. Match the sender field,
   // not text inside a message, to avoid impersonation via message contents.
   if (username !== process.env.COMMANDER_USERNAME) return;
 
   const prefix = 'Builders ';
-  const message = rawMessage.trim();
   if (!message.toLowerCase().startsWith(prefix.toLowerCase())) return;
 
   const command = message.slice(prefix.length).trim();
   const lower = command.toLowerCase();
 
   if (lower === 'help') {
-    reply('Commands: schem list | schem set <name> | coords set1 <x y z> | coords set2 <x y z> | material list | build schem | say <message>');
+    reply('Commands: schem list | schem set <name> | coords set1/set2 <x y z> | material list | holder <bot...> | build schem | say <message>');
     return;
   }
 
@@ -148,6 +267,17 @@ async function handleCommand(rawMessage, username) {
     return;
   }
 
+  const holderMatch = command.match(/^holder\s+(.+)$/i);
+  if (holderMatch) {
+    const requested = holderMatch[1].split(/[ ,]+/).filter(Boolean);
+    if (requested.some((name) => !/^[a-z0-9_]{1,16}$/i.test(name))) {
+      reply('Use bot usernames only: Builders holder BotOne BotTwo');
+      return;
+    }
+    await showInventory(requested);
+    return;
+  }
+
   if (lower === 'build schem') {
     reply('Build execution is not enabled yet. Material checks and safe placement must be implemented first.');
     return;
@@ -170,6 +300,4 @@ bot.on('chat', (username, message) => {
   });
 });
 
-// Some servers expose disguised/system messages as chat events rather than
-// the normal chat event. Do not parse arbitrary raw packets as commands yet:
-// implement this only after validating the server's message format.
+// Disguised/system messages need a tested parser before they can be trusted.
