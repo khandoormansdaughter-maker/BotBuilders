@@ -429,9 +429,34 @@ function handleInternalMessage(username, message) {
 
 function normalizeItemEnchantments(item, source = 'item') {
   if (!item || typeof item !== 'object') return;
-  // Mineflayer's dig-time calculation calls .concat() on enchantments. Some
-  // protocol/server combinations expose that field as an NBT object instead
-  // of the array expected by prismarine-block.
+
+  // Minecraft 26.x can expose Item#enchants as a component object rather than
+  // the array Mineflayer's dig-time calculation expects. In particular,
+  // digging.js calls .concat() on the held item's enchants and on helmet
+  // enchants, so normalize the property Mineflayer actually reads.
+  const raw = item.enchants;
+  if (Array.isArray(raw)) {
+    // Already in Mineflayer's expected [{ name, lvl }] format.
+  } else if (raw && typeof raw === 'object') {
+    const entries = Array.isArray(raw.enchantments)
+      ? raw.enchantments
+      : (Array.isArray(raw.value) ? raw.value : null);
+    if (entries) {
+      item.enchants = entries
+        .map((entry) => ({
+          name: String(entry?.name ?? entry?.id ?? entry?.type ?? '').replace(/^minecraft:/, ''),
+          lvl: Number(entry?.lvl ?? entry?.level ?? entry?.value ?? 0)
+        }))
+        .filter((entry) => entry.name && Number.isFinite(entry.lvl));
+    } else {
+      console.warn(`[${bot.username}] Dropping unsupported enchantment component on ${item.name || source} (${source}).`);
+      item.enchants = [];
+    }
+  } else {
+    item.enchants = [];
+  }
+
+  // Keep this legacy field safe too, if a server/plugin provides it.
   if (item.enchantments != null && !Array.isArray(item.enchantments)) {
     console.warn(`[${bot.username}] Normalizing non-array enchantments on ${item.name || source} (${source}).`);
     item.enchantments = [];
