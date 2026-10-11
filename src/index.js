@@ -361,7 +361,7 @@ async function handleCommand(rawMessage, username) {
     reply('Commands: follow <playername> | rtp | schem list | schem set <name> | coords set1/set2 <x y z> | material list | holder <bot...> | build schem | say <message>');
     return;
   }
-  const followMatch = command.match(/^follow\\s+([a-z0-9_]{1,16})$/i);
+  const followMatch = command.match(/^follow\s+([a-z0-9_]{1,16})$/i);
   if (followMatch) {
     const targetName = followMatch[1];
     const player = bot.players[targetName] ||
