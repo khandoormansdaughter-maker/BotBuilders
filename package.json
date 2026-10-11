@@ -9,7 +9,7 @@
     "check": "node --check src/index.js && node --check src/litematic.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
     "mineflayer": "^4.32.0",
