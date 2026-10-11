@@ -513,7 +513,7 @@ async function handleCommand(rawMessage, username) {
     }
     return;
   }
-  const digoutMatch = command.match(/^digout\\s+(-?\\d+)\\s+(\\d+)x(\\d+)x(\\d+)$/i);
+  const digoutMatch = command.match(/^digout\s+(-?\d+)\s+(\d+)x(\d+)x(\d+)$/i);
   if (digoutMatch) {
     if (bot.username.toLowerCase() !== coordinatorUsername.toLowerCase()) return;
     const targetY = Number(digoutMatch[1]);
