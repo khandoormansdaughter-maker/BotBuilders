@@ -14,6 +14,12 @@ for (const key of required) {
 
 const port = Number(process.env.MC_PORT || 25565);
 const version = process.env.MC_VERSION || false;
+const runnerMode = String(process.env.RUNNER_MODE || 'smp').trim().toLowerCase();
+if (!['smp', 'anarchy'].includes(runnerMode)) {
+  console.error('Invalid RUNNER_MODE. Choose smp or anarchy.');
+  process.exit(1);
+}
+const targetServer = runnerMode === 'anarchy' ? 'anarchy' : 'wanderwood';
 const inputDir = path.resolve(process.env.SCHEMATIC_DIR || 'Input');
 let coordinatorUsername;
 
@@ -70,6 +76,7 @@ bot.once('spawn', () => {
 // Log incoming server messages so authentication prompts and chat can be diagnosed
 // from the Actions log. Never log the configured passwords or outgoing auth commands.
 const handledAuthPrompts = new Set();
+const handledLoginConfirmations = new Set();
 const recentCommandMessages = new Map();
 
 function dispatchChatCommand(username, message, source) {
@@ -109,8 +116,11 @@ bot.on('messagestr', (message, position, jsonMsg, senderUuid) => {
     }
     return;
   }
-  if (/successful login/i.test(text)) {
-    console.log(`[${bot.username}] LOGIN CONFIRMED by server.`);
+  if (/successful login/i.test(text) && !handledLoginConfirmations.has(String(bot.username).toLowerCase())) {
+    handledLoginConfirmations.add(String(bot.username).toLowerCase());
+    console.log(`[${bot.username}] LOGIN CONFIRMED by server. Sending /server ${targetServer}.`);
+    bot.chat(`/server ${targetServer}`);
+
     const statusDir = process.env.LOGIN_STATUS_DIR;
     if (statusDir) {
       try {
