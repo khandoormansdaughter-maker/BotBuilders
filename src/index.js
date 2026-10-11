@@ -247,6 +247,8 @@ function parseCoordinates(value) {
 const state = { schematic: null, pos1: null, pos2: null, following: null };
 const pendingInventory = new Map();
 const digoutCompletions = new Map();
+let activeIslandMapRun = null;
+const islandMapCompletions = new Map();
 let requestCounter = 0;
 
 function ownInventory() {
@@ -304,6 +306,36 @@ function sendInventoryReport(requestId) {
 function handleInternalMessage(username, message) {
   const parts = message.trim().split(/\s+/);
   if (parts[0] !== 'BuildersInternal') return false;
+
+  if (parts[1] === 'island-map-start' && parts.length === 6 && username.toLowerCase() === coordinatorUsername.toLowerCase()) {
+    const [, , runId, rawX, rawY, rawZ] = parts;
+    const start = { x: Number(rawX), y: Number(rawY), z: Number(rawZ) };
+    if (bot.username.toLowerCase() !== coordinatorUsername.toLowerCase() &&
+        Number.isInteger(start.x) && Number.isInteger(start.y) && Number.isInteger(start.z)) {
+      void mineEndIsland(runId, start);
+    }
+    return true;
+  }
+
+  if (parts[1] === 'island-map-done' && parts.length === 5 &&
+      bot.username.toLowerCase() === coordinatorUsername.toLowerCase()) {
+    const [, , runId, reportedBot, rawColumns] = parts;
+    if (runId === activeIslandMapRun &&
+        configuredBots.some((name) => name.toLowerCase() === reportedBot.toLowerCase()) &&
+        username.toLowerCase() === reportedBot.toLowerCase() &&
+        Number.isInteger(Number(rawColumns))) {
+      if (!islandMapCompletions.has(runId)) islandMapCompletions.set(runId, new Set());
+      const done = islandMapCompletions.get(runId);
+      done.add(reportedBot.toLowerCase());
+      console.log('[' + bot.username + '] Island map completion reports: ' + done.size + '/' + configuredBots.length + '.');
+      if (configuredBots.every((name) => done.has(name.toLowerCase()))) {
+        reply('fully mapped');
+        islandMapCompletions.delete(runId);
+        activeIslandMapRun = null;
+      }
+    }
+    return true;
+  }
 
   if (parts[1] === 'digout-warning' && parts.length === 8) {
     const diggerName = parts[2];
@@ -903,31 +935,48 @@ function findTopEndstoneColumn(x, z, scanTop = 319, scanBottom = 0) {
   return null;
 }
 
-async function mineEndIsland() {
+async function mineEndIsland(runId = null, sharedStart = null) {
   const generation = actionGeneration;
-  if (bot.username.toLowerCase() !== coordinatorUsername.toLowerCase()) return;
   state.following = null;
   bot.pathfinder.setGoal(null);
   try {
     await equipBestPickaxe();
-    const startX = Math.floor(bot.entity.position.x);
-    const startZ = Math.floor(bot.entity.position.z);
+    let startX = sharedStart ? sharedStart.x : Math.floor(bot.entity.position.x);
+    let startZ = sharedStart ? sharedStart.z : Math.floor(bot.entity.position.z);
+    if (sharedStart) {
+      await bot.pathfinder.goto(new GoalNear(sharedStart.x, sharedStart.y + 1, sharedStart.z, 2));
+      if (actionWasStopped(generation)) return;
+    }
     const startColumn = findTopEndstoneColumn(startX, startZ);
     if (!startColumn) {
-      reply('Mine island stopped: no loaded top-layer endstone found at your position. Stand on the End island and try again.');
+      if (bot.username.toLowerCase() === coordinatorUsername.toLowerCase()) {
+        reply('Mine island stopped: no loaded top-layer endstone found at the start position. Stand on the End island and try again.');
+      }
       return;
     }
 
-    reply('Mine island started: mapping connected End-stone surface first; this can take a long time.');
+    if (!runId) {
+      runId = Date.now().toString(36);
+      activeIslandMapRun = runId;
+      islandMapCompletions.set(runId, new Set());
+      bot.chat('BuildersInternal island-map-start ' + runId + ' ' + startX + ' ' + startColumn.topY + ' ' + startZ);
+      reply('Mine island started: all configured bots will map the connected End-stone surface and mine assigned columns as they go.');
+    }
+
     const queue = [startColumn];
     const visited = new Set([startX + ',' + startZ]);
     const columns = [];
     const maxColumns = 60000;
     const directions = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    const configuredIndex = configuredBots.findIndex((name) => name.toLowerCase() === bot.username.toLowerCase());
+    const workerIndex = configuredIndex < 0 ? 0 : configuredIndex;
     let cursor = 0;
+    let mined = 0;
+    let skipped = 0;
 
-    // Discover reachable top-surface columns before mining. This avoids
-    // confusing void or separate islands with the island currently occupied.
+    // Each bot independently explores the same connected surface. Once a
+    // column's neighbors have been discovered, its assigned bot mines it,
+    // so mapping and mining overlap instead of waiting for a full scan.
     while (cursor < queue.length && columns.length < maxColumns && !actionWasStopped(generation)) {
       const current = queue[cursor++];
       columns.push(current);
@@ -960,65 +1009,59 @@ async function mineEndIsland() {
           // Unreachable columns, cliffs, and unloaded boundaries are skipped.
         }
       }
-      if (columns.length % 100 === 0) {
-        console.log('[' + bot.username + '] End island mapping: ' + columns.length + ' surface columns visited; ' + (queue.length - cursor) + ' queued.');
-      }
-    }
 
-    if (columns.length >= maxColumns) {
-      console.warn('[' + bot.username + '] End island scan hit the ' + maxColumns + '-column safety limit; only the mapped area will be processed.');
-    }
-    if (columns.length < 2) {
-      reply('Mine island stopped: could not map a connected island surface from this position.');
-      return;
-    }
-
-    // Mine downward in layers while leaving the bottom layer as a continuous
-    // floor. Never dig the block currently occupied by the bot.
-    const lowestY = 1;
-    let mined = 0;
-    let skipped = 0;
-    const highestY = Math.max(...columns.map((column) => column.topY));
-    for (let y = highestY; y > lowestY && !actionWasStopped(generation); y--) {
-      for (const column of columns) {
-        if (actionWasStopped(generation)) return;
-        let block = bot.blockAt(new Vec3(column.x, y, column.z));
-        if (!block || block.name !== 'end_stone') continue;
-        try {
-          await bot.pathfinder.goto(new GoalNear(column.x, y, column.z, 3));
-          block = bot.blockAt(new Vec3(column.x, y, column.z));
-          if (!block || block.name !== 'end_stone' || !bot.canDigBlock(block)) continue;
-          const feet = bot.entity.position;
-          const feetX = Math.floor(feet.x);
-          const feetY = Math.floor(feet.y);
-          const feetZ = Math.floor(feet.z);
-          // Keep both the occupied feet block and the supporting block intact.
-          if ((block.position.x === feetX && block.position.y === feetY && block.position.z === feetZ) ||
-              (block.position.x === feetX && block.position.y === feetY - 1 && block.position.z === feetZ)) {
-            skipped++;
-            continue;
+      // Deterministically distribute columns so the bots do not all dig the
+      // exact same vertical column. Other bots still map the whole surface.
+      const owner = ((current.x * 31 + current.z * 17) >>> 0) % Math.max(1, configuredBots.length);
+      if (owner === workerIndex) {
+        for (let y = current.topY; y > 1 && !actionWasStopped(generation); y--) {
+          let block = bot.blockAt(new Vec3(current.x, y, current.z));
+          if (!block || block.name !== 'end_stone') continue;
+          try {
+            await bot.pathfinder.goto(new GoalNear(current.x, y, current.z, 3));
+            if (actionWasStopped(generation)) return;
+            block = bot.blockAt(new Vec3(current.x, y, current.z));
+            if (!block || block.name !== 'end_stone' || !bot.canDigBlock(block)) continue;
+            const feet = bot.entity.position;
+            const feetX = Math.floor(feet.x);
+            const feetY = Math.floor(feet.y);
+            const feetZ = Math.floor(feet.z);
+            if ((block.position.x === feetX && block.position.y === feetY && block.position.z === feetZ) ||
+                (block.position.x === feetX && block.position.y === feetY - 1 && block.position.z === feetZ)) {
+              skipped++;
+              continue;
+            }
+            const pickaxe = bestPickaxe();
+            if (!pickaxe) throw new Error('No pickaxe found in inventory.');
+            await bot.equip(pickaxe, 'hand');
+            normalizeInventoryEnchantments();
+            await bot.dig(block);
+            if (actionWasStopped(generation)) return;
+            mined++;
+          } catch (error) {
+            console.warn('[' + bot.username + '] End island could not mine ' + current.x + ' ' + y + ' ' + current.z + ': ' + error.message);
           }
-          const pickaxe = bestPickaxe();
-          if (!pickaxe) throw new Error('No pickaxe found in inventory.');
-          await bot.equip(pickaxe, 'hand');
-          normalizeInventoryEnchantments();
-          await bot.dig(block);
-          if (actionWasStopped(generation)) return;
-          mined++;
-        } catch (error) {
-          console.warn('[' + bot.username + '] End island could not mine ' + column.x + ' ' + y + ' ' + column.z + ': ' + error.message);
         }
       }
-      if (y % 8 === 0) {
-        console.log('[' + bot.username + '] End island mining progress: layer Y=' + y + ', mined=' + mined + ', skipped=' + skipped + '.');
+
+      if (columns.length % 100 === 0) {
+        console.log('[' + bot.username + '] End island mapping: ' + columns.length + ' surface columns visited; ' + (queue.length - cursor) + ' queued; mined=' + mined + '.');
       }
+    }
+
+    if (actionWasStopped(generation)) return;
+    if (columns.length >= maxColumns) {
+      console.warn('[' + bot.username + '] End island scan hit the ' + maxColumns + '-column safety limit.');
     }
     const pickaxe = bestPickaxe();
     if (pickaxe) await bot.equip(pickaxe, 'hand');
-    reply('Mine island finished: mined ' + mined + ' endstone block(s) across ' + columns.length + ' mapped surface columns. Left a bottom floor; skipped ' + skipped + ' unsafe block(s).');
+    console.log('[' + bot.username + '] End island mapping pass finished: ' + columns.length + ' columns mapped, ' + mined + ' endstone mined, ' + skipped + ' unsafe blocks skipped.');
+    if (runId) bot.chat('BuildersInternal island-map-done ' + runId + ' ' + bot.username + ' ' + columns.length);
   } catch (error) {
     console.error('[' + bot.username + '] Mine island failed:', error);
-    reply('Mine island failed for ' + bot.username + '; check the bot log.');
+    if (bot.username.toLowerCase() === coordinatorUsername.toLowerCase()) {
+      reply('Mine island failed for ' + bot.username + '; check the bot log.');
+    }
   }
 }
 
