@@ -17,7 +17,7 @@ on:
         required: false
         type: string
       bot_username:
-        description: This bot's Minecraft username (blank uses the first BOT_CREDENTIALS username)
+        description: Optional: launch only this bot; leave blank to launch every BOT_CREDENTIALS bot
         required: false
         type: string
 
@@ -39,25 +39,49 @@ jobs:
         run: npm install --ignore-scripts
       - name: Check JavaScript syntax
         run: npm run check
-      - name: Start bot
+      - name: Start bot or bot group
         env:
           MC_HOST: ${{ inputs.server_host }}
           MC_PORT: ${{ inputs.server_port }}
           MC_VERSION: ${{ inputs.minecraft_version }}
-          MC_USERNAME: ${{ inputs.bot_username }}
+          REQUESTED_BOT_USERNAME: ${{ inputs.bot_username }}
           MC_AUTH: ${{ secrets.MC_AUTH }}
           BOT_CREDENTIALS: ${{ secrets.BOT_CREDENTIALS }}
           COMMANDER_USERNAME: ${{ secrets.COMMANDER }}
           BOT_COORDINATOR_USERNAME: ${{ secrets.BOT_COORDINATOR_USERNAME }}
           BOT_GROUP: ${{ secrets.BOT_GROUP }}
+        shell: bash
         run: |
-          if [ -z "$MC_USERNAME" ]; then
-            MC_USERNAME="$(printf '%s\n' "$BOT_CREDENTIALS" | sed -n '1{s#/.*##; s/^[[:space:]]*//; s/[[:space:]]*$//; p;}')"
+          if [ -n "$REQUESTED_BOT_USERNAME" ]; then
+            echo "Launching the requested bot."
+            MC_USERNAME="$REQUESTED_BOT_USERNAME" npm start
+            exit $?
           fi
-          if [ -z "$MC_USERNAME" ]; then
-            echo "No bot username provided. Enter bot_username in the workflow, or add BOT_CREDENTIALS with username/password lines."
+
+          if [ -z "$BOT_CREDENTIALS" ]; then
+            echo "BOT_CREDENTIALS is empty. Add one username/password pair per line, or enter bot_username to launch one bot."
             exit 1
           fi
-          echo "MC_USERNAME=$MC_USERNAME" >> "$GITHUB_ENV"
-          export MC_USERNAME
-          npm start
+
+          count=0
+          while IFS= read -r credential || [ -n "$credential" ]; do
+            [ -z "${credential//[[:space:]]/}" ] && continue
+            username="${credential%%/*}"
+            username="$(printf '%s' "$username" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+            if [ -z "$username" ] || [ "$username" = "$credential" ]; then
+              echo "Invalid BOT_CREDENTIALS line. Use username/password, one bot per line."
+              exit 1
+            fi
+            echo "Starting bot process $((count + 1)) for username: $username"
+            MC_USERNAME="$username" npm start &
+            count=$((count + 1))
+            sleep 2
+          done <<< "$BOT_CREDENTIALS"
+
+          if [ "$count" -eq 0 ]; then
+            echo "No bot usernames were found in BOT_CREDENTIALS."
+            exit 1
+          fi
+
+          echo "Started $count bot process(es). Waiting for them to exit."
+          wait
