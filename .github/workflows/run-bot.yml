@@ -16,6 +16,10 @@ on:
         description: Minecraft version (leave blank for auto-detect)
         required: false
         type: string
+      bot_username:
+        description: This bot's Minecraft username (blank uses MC_USERNAME secret)
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -40,7 +44,9 @@ jobs:
           MC_HOST: ${{ inputs.server_host }}
           MC_PORT: ${{ inputs.server_port }}
           MC_VERSION: ${{ inputs.minecraft_version }}
-          MC_USERNAME: ${{ secrets.MC_USERNAME }}
+          MC_USERNAME: ${{ inputs.bot_username || secrets.MC_USERNAME }}
           MC_AUTH: ${{ secrets.MC_AUTH }}
           COMMANDER_USERNAME: ${{ secrets.COMMANDER_USERNAME }}
+          BOT_COORDINATOR_USERNAME: ${{ secrets.BOT_COORDINATOR_USERNAME }}
+          BOT_GROUP: ${{ secrets.BOT_GROUP }}
         run: npm start
