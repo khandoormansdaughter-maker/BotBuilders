@@ -1,32 +1,34 @@
 # BotBuilders
 
-Minecraft bots that inspect schematic files, estimate material requirements, plan builds, and eventually construct them from commander chat commands.
+Minecraft bots that inspect schematic files, compare materials across a team of bots, plan builds, and eventually construct them from commander chat commands.
 
 ## Current status
 
-The Node.js/Mineflayer scaffold connects to a server, authorizes commands by the chat sender username, lists/selects schematic files, stores two coordinates, and supports a basic `say` command. **Litematica parsing and a first-pass material report are now implemented. Actual block placement, live inventory comparison, and supply staging are not implemented.** The bot deliberately refuses to claim a build is ready until those systems exist.
+The Node.js/Mineflayer scaffold connects to a server, authorizes commands by the chat sender username, lists/selects schematic files, stores two coordinates, and supports a basic `say` command. Litematica parsing and first-pass material counting are implemented. **Team inventory reports now aggregate the player inventories of configured bots. Actual block placement, shulker/chest scanning, and supply staging are not implemented.**
 
-## Requirements
+## Requirements and configuration
 
 - Node.js 20+
 - A Minecraft server the operator is authorized to use, reachable from the GitHub Actions runner
 - GitHub Actions enabled for the repository
 
-## Configure GitHub Actions
+In **Settings → Secrets and variables → Actions**, configure:
 
-In repository **Settings → Secrets and variables → Actions**, add:
+- `MC_USERNAME`: default bot username, used if the workflow input is blank
+- `COMMANDER_USERNAME`: exact in-game username allowed to issue commands
+- `BOT_COORDINATOR_USERNAME`: username of the one bot instance that coordinates inventory queries
+- `BOT_GROUP`: comma-separated Minecraft usernames for the team, e.g. `BuilderOne,BuilderTwo,BuilderThree`
+- `MC_AUTH` (optional): Mineflayer authentication mode; defaults to `offline`
 
-- `MC_USERNAME`: bot's in-game username
-- `COMMANDER_USERNAME`: exact in-game username allowed to control the bot
-- `MC_AUTH` (optional): Mineflayer authentication mode; defaults to `offline` for offline-mode servers
+Run **Actions → Run BotBuilders → Run workflow** once per bot, using the same server and a distinct `bot_username` for each instance. Every bot must use the same `BOT_COORDINATOR_USERNAME`, `BOT_GROUP`, and `COMMANDER_USERNAME`. Keep the coordinator's username in `BOT_GROUP`. Inventory commands should be sent to the coordinator bot.
 
-Run **Actions → Run BotBuilders → Run workflow**, then enter the server host, port, and optionally the Minecraft version. Do not put passwords or tokens in workflow inputs, commit them to the repository, or send them in chat. Offline-mode servers typically do not use a Minecraft account password; servers with an authentication plugin may require a separate, server-specific login flow.
+Do not put passwords or tokens in workflow inputs, commit them to the repository, or send them in chat. Offline-mode servers typically use username-only login; server-specific authentication plugins may need a separate login flow.
 
-GitHub-hosted runners are temporary and their outbound network access may not work with every server. The workflow has a six-hour job limit and stops when the job ends.
+GitHub-hosted runners are temporary and their outbound network access may not work with every server. Each workflow run has a six-hour job limit and stops when the job ends.
 
 ## Schematic files
 
-Put files in `Input/`. The bot can list `.schem`, `.schematic`, and `.litematic` files, but **material counting currently supports only `.litematic`**. Sponge schematic formats are listed but not parsed yet.
+Put files in `Input/`. The bot lists `.schem`, `.schematic`, and `.litematic` files, but material counting currently supports only `.litematic`. Sponge schematic formats are listed but not parsed yet.
 
 ## Chat commands
 
@@ -37,21 +39,24 @@ Commands are accepted only when the chat event's sender username exactly matches
 - `Builders schem set <filename>` — select an existing file (include the extension)
 - `Builders coords set1 <x y z>` — set first corner
 - `Builders coords set2 <x y z>` — set second corner
-- `Builders material list` — for a selected `.litematic`, count non-air blocks by type and estimate stacks/shulker boxes
-- `Builders build schem` — disabled until placement validation, inventory checks, and safe execution are implemented
+- `Builders holder BuilderOne BuilderTwo` — ask the named bots for their current player inventories and print per-bot and combined totals
+- `Builders material list` — compare the selected Litematica's required block counts with combined inventories for `BOT_GROUP`
+- `Builders build schem` — disabled until placement validation and safe execution are implemented
 - `Builders say <message>` — send a message to public chat
 
-The shulker estimate is approximate: it assumes 64-item stacks and 27 stacks per box, and does not yet account for item-specific stack limits, inventory contents, tools, or spare blocks.
+Inventory requests use chat messages between bot instances. All instances need to be online, on the same server, and configured with the same coordinator username. If a bot does not reply, the coordinator reports it as missing. **This chat protocol is not cryptographically authenticated**; use it only on a server where usernames and chat senders are trustworthy, and do not treat its totals as authoritative on an untrusted/offline-mode server.
+
+The current comparison only counts each bot's carried player inventory. It does not inspect other players, shulker boxes, ender chests, or world chests. It also does not yet fully handle item variants, item-specific stack limits, tools, or spare blocks. Material reports are advisory and do not enable building.
 
 ## Build roadmap
 
-1. **Test the parser:** validate Litematica NBT parsing and palette decoding against known sample files, including empty blocks and multiple regions.
-2. **Schematic adapter:** support Sponge `.schem` files and expose dimensions/origin/orientation.
-3. **Placement validation:** verify both corners, orientation, world height, bounding-box dimensions, and loaded/accessibility before moving blocks.
-4. **Inventory and supply planning:** count inventory and shulker contents; account for tool requirements and spare traversal blocks; report shortages before starting.
-5. **Build executor:** place blocks in a safe order, pathfind around obstacles, track progress, and recover from interruptions without silently duplicating work.
-6. **Supply staging:** stage clearly labeled shulkers only after the plan is validated; report coordinates and contents, and avoid overwriting existing blocks without explicit approval.
-7. **Chat hardening and tests:** support server-specific system messages only through tested parsers; ignore messages whose sender cannot be authenticated; test parsing, arithmetic, bounds, authorization, and dry-run plans before allowing real placement.
+1. Test Litematica NBT parsing and palette decoding against known files, including empty blocks and multiple regions.
+2. Support Sponge `.schem` files and expose dimensions/origin/orientation.
+3. Validate both corners, orientation, world height, bounding-box dimensions, and loaded/accessibility before movement.
+4. Improve inventory accounting for item variants, stack limits, tools, and shulker contents; report shortages before starting.
+5. Implement a dry-run build plan, then a guarded executor that tracks progress and recovers from interruptions.
+6. Stage clearly labeled shulkers only after the plan is validated; avoid overwriting existing blocks without explicit approval.
+7. Add tested server-specific system-chat parsers and automated tests for parsing, inventory arithmetic, bounds, and command authorization.
 
 ## Safety and reliability notes
 
