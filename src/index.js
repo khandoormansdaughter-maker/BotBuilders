@@ -519,6 +519,7 @@ async function lootNearbyShulker() {
 }
 
 async function gearUp() {
+  const generation = actionGeneration;
   state.following = null;
   bot.pathfinder.setGoal(null);
   let shulkerChecked = false;
@@ -538,6 +539,7 @@ async function gearUp() {
     ['boots', 'feet']
   ];
   for (const [suffix, destination] of armorSlots) {
+    if (actionWasStopped(generation)) return;
     const candidates = bot.inventory.items()
       .filter((item) => item.name.endsWith('_' + suffix))
       .sort((a, b) => gearItemPriority(a) - gearItemPriority(b));
@@ -551,6 +553,7 @@ async function gearUp() {
     }
   }
 
+  if (actionWasStopped(generation)) return;
   const totem = bot.inventory.items().find((item) => item.name === 'totem_of_undying');
   if (totem) {
     try {
@@ -686,6 +689,7 @@ async function runDigoutWorker(diggerName, targetY, dimensions) {
           if (!block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air') continue;
           try {
             await bot.pathfinder.goto(new GoalNear(x, y, z, 3));
+          if (actionWasStopped(generation)) return;
             block = bot.blockAt(new Vec3(x, y, z));
             if (!block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air') continue;
             const hazard = fluidHazardAt(block.position);
@@ -710,11 +714,11 @@ async function runDigoutWorker(diggerName, targetY, dimensions) {
     // appeared after their column was first mined. Fluids and their immediate neighbors
     // are protected; those blocks are reported and left alone.
     let cleanupMined = 0;
-    for (let pass = 0; pass < 2; pass++) {
-      for (let y = targetY + height - 1; y >= targetY; y--) {
-        for (let xOffset = 0; xOffset < width; xOffset++) {
+    for (let pass = 0; pass < 2 && !actionWasStopped(generation); pass++) {
+      for (let y = targetY + height - 1; y >= targetY && !actionWasStopped(generation); y--) {
+        for (let xOffset = 0; xOffset < width && !actionWasStopped(generation); xOffset++) {
           if (xOffset % workers.length !== workerIndex) continue;
-          for (let zOffset = 0; zOffset < depth; zOffset++) {
+          for (let zOffset = 0; zOffset < depth && !actionWasStopped(generation); zOffset++) {
             const x = startX + xOffset;
             const z = startZ + zOffset;
             let block = bot.blockAt(new Vec3(x, y, z));
@@ -729,6 +733,7 @@ async function runDigoutWorker(diggerName, targetY, dimensions) {
             }
             try {
               await bot.pathfinder.goto(new GoalNear(x, y, z, 3));
+              if (actionWasStopped(generation)) return;
               block = bot.blockAt(new Vec3(x, y, z));
               if (!block || ['air', 'cave_air', 'void_air'].includes(block.name)) continue;
               const recheckHazard = fluidHazardAt(block.position);
@@ -762,13 +767,13 @@ async function runDigoutWorker(diggerName, targetY, dimensions) {
         perimeter.push({ key, target: new Vec3(x, y, z), support: new Vec3(sx, sy, sz) });
       }
     };
-    for (let y = targetY; y < targetY + height; y++) {
-      for (let zOffset = 0; zOffset < depth; zOffset++) {
+    for (let y = targetY; y < targetY + height && !actionWasStopped(generation); y++) {
+      for (let zOffset = 0; zOffset < depth && !actionWasStopped(generation); zOffset++) {
         const z = startZ + zOffset;
         addPerimeterCell(startX - 1, y, z, startX - 2, y, z);
         addPerimeterCell(startX + width, y, z, startX + width + 1, y, z);
       }
-      for (let xOffset = 0; xOffset < width; xOffset++) {
+      for (let xOffset = 0; xOffset < width && !actionWasStopped(generation); xOffset++) {
         const x = startX + xOffset;
         addPerimeterCell(x, y, startZ - 1, x, y, startZ - 2);
         addPerimeterCell(x, y, startZ + depth, x, y, startZ + depth + 1);
@@ -781,7 +786,7 @@ async function runDigoutWorker(diggerName, targetY, dimensions) {
         !['torch', 'soul_torch', 'redstone_torch', 'soul_lantern', 'lantern'].includes(item.name);
     });
     let sealedGaps = 0;
-    for (let index = workerIndex; index < perimeter.length; index += workers.length) {
+    for (let index = workerIndex; index < perimeter.length && !actionWasStopped(generation); index += workers.length) {
       let target = bot.blockAt(perimeter[index].target);
       if (!target || !['air', 'cave_air', 'void_air'].includes(target.name)) continue;
       const hazard = fluidHazardAt(perimeter[index].target);
@@ -809,6 +814,7 @@ async function runDigoutWorker(diggerName, targetY, dimensions) {
         if (!blockItems.length) break;
         await bot.equip(blockItems[0], 'hand');
         const face = perimeter[index].target.minus(perimeter[index].support);
+        if (actionWasStopped(generation)) return;
         await bot.placeBlock(support, face);
         sealedGaps++;
       } catch (error) {
@@ -829,7 +835,7 @@ async function runDigoutWorker(diggerName, targetY, dimensions) {
     bot.chat(`BuildersInternal digout-worker-done ${diggerName} ${bot.username}`);
     const expectedWorkers = workers.map((name) => name.toLowerCase());
     const waitStarted = Date.now();
-    while (Date.now() - waitStarted < 600000) {
+    while (Date.now() - waitStarted < 600000 && !actionWasStopped(generation)) {
       const done = digoutCompletions.get(digoutKey) || new Set();
       if (expectedWorkers.every((name) => done.has(name))) break;
       await waitMs(500);
@@ -849,7 +855,9 @@ async function runDigoutWorker(diggerName, targetY, dimensions) {
       const zOffsets = [...new Set([Math.min(1, depthForTorches - 1), Math.min(9, depthForTorches - 1)])];
       let placedTorches = 0;
       for (const xOffset of xOffsets) {
+        if (actionWasStopped(generation)) return;
         for (const zOffset of zOffsets) {
+          if (actionWasStopped(generation)) return;
           const torchSlot = xOffsets.indexOf(xOffset) * zOffsets.length + zOffsets.indexOf(zOffset);
           if (torchSlot % workers.length !== workerIndex) continue;
           const x = startX + xOffset;
@@ -865,6 +873,7 @@ async function runDigoutWorker(diggerName, targetY, dimensions) {
             const torch = bot.inventory.items().find((item) => item.name === 'torch');
             if (!torch) break;
             await bot.equip(torch, 'hand');
+            if (actionWasStopped(generation)) return;
             await bot.placeBlock(floor, new Vec3(0, 1, 0));
             placedTorches++;
           } catch (error) {
@@ -934,6 +943,7 @@ async function mineEndIsland() {
         if (!candidate) {
           try {
             await bot.pathfinder.goto(new GoalNear(current.x, current.topY + 1, current.z, 2));
+            if (actionWasStopped(generation)) return;
             candidate = findTopEndstoneColumn(x, z);
           } catch (_) {
             candidate = null;
@@ -942,6 +952,7 @@ async function mineEndIsland() {
         if (!candidate || Math.abs(candidate.topY - current.topY) > 1) continue;
         try {
           await bot.pathfinder.goto(new GoalNear(x, candidate.topY + 1, z, 1));
+          if (actionWasStopped(generation)) return;
           const refreshed = findTopEndstoneColumn(x, z);
           if (!refreshed || Math.abs(refreshed.topY - current.topY) > 1) continue;
           queue.push(refreshed);
