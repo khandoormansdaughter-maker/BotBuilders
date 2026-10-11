@@ -12,10 +12,6 @@ on:
         required: true
         default: "25565"
         type: string
-      minecraft_version:
-        description: Minecraft version (leave blank for auto-detect)
-        required: false
-        type: string
       bot_username:
         description: "Optional: launch only this bot; leave blank to launch every BOT_CREDENTIALS bot"
         required: false
@@ -43,7 +39,7 @@ jobs:
         env:
           MC_HOST: ${{ inputs.server_host }}
           MC_PORT: ${{ inputs.server_port }}
-          MC_VERSION: ${{ inputs.minecraft_version }}
+          MC_VERSION: "26.1"
           REQUESTED_BOT_USERNAME: ${{ inputs.bot_username }}
           MC_AUTH: ${{ secrets.MC_AUTH }}
           BOT_CREDENTIALS: ${{ secrets.BOT_CREDENTIALS }}
