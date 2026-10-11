@@ -74,9 +74,9 @@ bot.on('messagestr', (message, position) => {
   const text = String(message).replace(/§[0-9a-fk-or]/gi, '').trim();
   console.log(`[${bot.username}] [INCOMING ${position || 'unknown'}] ${text}`);
 
-  // Only system messages can trigger authentication, so a player cannot trigger
-  // a password command by typing a fake prompt in public chat.
-  if (position !== 'system') return;
+  // Ignore ordinary player chat so a player cannot trigger a password command
+  // by typing a fake prompt. Auth plugins may use system or game-info messages.
+  if (position === 'chat') return;
   let action = null;
   if (/\bregister\b/i.test(text) && /\/register\b/i.test(text)) {
     action = 'register';
