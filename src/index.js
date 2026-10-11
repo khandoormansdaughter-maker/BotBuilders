@@ -49,7 +49,7 @@ function loadBotCredentials(raw) {
 }
 
 const botCredentials = loadBotCredentials(process.env.BOT_CREDENTIALS);
-const configuredBots = (process.env.BOT_GROUP || process.env.MC_USERNAME)
+const configuredBots = (process.env.BOT_GROUP || [...botCredentials.keys()].join(',') || process.env.MC_USERNAME)
   .split(',').map((name) => name.trim()).filter(Boolean);
 const bot = mineflayer.createBot({
   host: process.env.MC_HOST,
@@ -63,37 +63,41 @@ bot.loadPlugin(pathfinder);
 
 bot.once('spawn', () => {
   bot.pathfinder.setMovements(new Movements(bot));
-  console.log(`Connected as ${bot.username}. Coordinator: ${coordinatorUsername}. Waiting for commander chat commands.`);
+  console.log(`[${bot.username}] Connected. Coordinator: ${coordinatorUsername}. Waiting for commander chat commands.`);
 });
 
-// Auth plugins usually send these prompts as system messages. Only inspect system
-// messages so a player cannot trigger a password command by typing a fake prompt in chat.
+// Log incoming server messages so authentication prompts and chat can be diagnosed
+// from the Actions log. Never log the configured passwords or outgoing auth commands.
 const handledAuthPrompts = new Set();
 bot.on('messagestr', (message, position) => {
-  if (position !== 'system') return;
   const text = String(message).replace(/§[0-9a-fk-or]/gi, '').trim();
+  console.log(`[${bot.username}] [INCOMING ${position || 'unknown'}] ${text}`);
+
+  // Only system messages can trigger authentication, so a player cannot trigger
+  // a password command by typing a fake prompt in public chat.
+  if (position !== 'system') return;
   let action = null;
-  if (/Please,\s*register to the server with the command:\s*\/register\s*<password>\s+<password>/i.test(text)) {
+  if (/\bregister\b/i.test(text) && /\/register\b/i.test(text)) {
     action = 'register';
-  } else if (/Please,\s*login with the command:\s*\/login\s*<password>/i.test(text)) {
+  } else if (/\blog\s*in\b|\blogin\b/i.test(text) && /\/login\b/i.test(text)) {
     action = 'login';
   }
   if (!action || handledAuthPrompts.has(action)) return;
-  handledAuthPrompts.add(action);
 
   const password = botCredentials.get(String(bot.username).toLowerCase());
   if (!password) {
-    console.error(`Server requested ${action}, but BOT_CREDENTIALS has no entry for this bot username.`);
+    console.error(`[${bot.username}] Server requested ${action}, but BOT_CREDENTIALS has no entry for this bot username.`);
     return;
   }
+  handledAuthPrompts.add(action);
   if (action === 'register') bot.chat(`/register ${password} ${password}`);
   else bot.chat(`/login ${password}`);
-  console.log(`Sent / ${action} command in response to the server's system prompt.`);
+  console.log(`[${bot.username}] Sent the / ${action} command in response to a system prompt (password hidden).`);
 });
 
-bot.on('kicked', (reason) => console.error('Kicked from server:', reason));
-bot.on('error', (error) => console.error('Minecraft bot error:', error));
-bot.on('end', () => console.log('Minecraft connection ended.'));
+bot.on('kicked', (reason) => console.error(`[${bot.username}] Kicked from server:`, reason));
+bot.on('error', (error) => console.error(`[${bot.username}] Minecraft bot error:`, error));
+bot.on('end', () => console.log(`[${bot.username}] Minecraft connection ended.`));
 
 function reply(message) {
   bot.chat(String(message).slice(0, 240));
@@ -335,7 +339,7 @@ async function handleCommand(rawMessage, username) {
 bot.on('chat', (username, message) => {
   if (username === bot.username) return;
   void handleCommand(message, username).catch((error) => {
-    console.error('Command handler error:', error);
+    console.error(`[${bot.username}] Command handler error:`, error);
     reply('Command failed; check the bot log for details.');
   });
 });
