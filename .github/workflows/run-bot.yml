@@ -46,41 +46,80 @@ jobs:
           COMMANDER_USERNAME: ${{ secrets.COMMANDER }}
           BOT_COORDINATOR_USERNAME: ${{ secrets.BOT_COORDINATOR_USERNAME }}
           BOT_GROUP: ${{ secrets.BOT_GROUP }}
+          LOGIN_STATUS_DIR: /tmp/botbuilders-login-status
         shell: bash
         run: |
+          set -uo pipefail
+          STATUS_DIR="$LOGIN_STATUS_DIR"
+          rm -rf "$STATUS_DIR"
+          mkdir -p "$STATUS_DIR"
+          expected_bots=()
+
           if [ -n "$REQUESTED_BOT_USERNAME" ]; then
-            echo "Launching the requested bot."
-            MC_USERNAME="$REQUESTED_BOT_USERNAME" npm start
-            exit $?
-          fi
-
-          if [ -z "$BOT_CREDENTIALS" ]; then
-            echo "BOT_CREDENTIALS is empty. Add one username/password pair per line, or enter bot_username to launch one bot."
-            exit 1
-          fi
-
-          count=0
-          while IFS= read -r credential || [ -n "$credential" ]; do
-            [ -z "${credential//[[:space:]]/}" ] && continue
-            username="${credential%%/*}"
-            username="$(printf '%s' "$username" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
-            if [ -z "$username" ] || [ "$username" = "$credential" ]; then
-              echo "Invalid BOT_CREDENTIALS line. Use username/password, one bot per line."
+            expected_bots+=("$REQUESTED_BOT_USERNAME")
+            echo "Starting requested bot: $REQUESTED_BOT_USERNAME"
+            MC_USERNAME="$REQUESTED_BOT_USERNAME" npm start &
+          else
+            if [ -z "$BOT_CREDENTIALS" ]; then
+              echo "BOT_CREDENTIALS is empty. Add one username/password pair per line, or enter bot_username to launch one bot."
               exit 1
             fi
-            echo "Starting bot process $((count + 1)) for username: $username"
-            MC_USERNAME="$username" npm start &
-            count=$((count + 1))
-            if [ "$count" -lt 5 ]; then
-              echo "Waiting 5 seconds before starting the next bot."
-              sleep 5
-            fi
-          done <<< "$BOT_CREDENTIALS"
 
-          if [ "$count" -eq 0 ]; then
-            echo "No bot usernames were found in BOT_CREDENTIALS."
-            exit 1
+            count=0
+            while IFS= read -r credential || [ -n "$credential" ]; do
+              [ -z "${credential//[[:space:]]/}" ] && continue
+              username="${credential%%/*}"
+              username="$(printf '%s' "$username" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+              if [ -z "$username" ] || [ "$username" = "$credential" ]; then
+                echo "Invalid BOT_CREDENTIALS line. Use username/password, one bot per line."
+                exit 1
+              fi
+              expected_bots+=("$username")
+              echo "Starting bot process $((count + 1)) for username: $username"
+              MC_USERNAME="$username" npm start &
+              count=$((count + 1))
+              if [ "$count" -lt 5 ]; then
+                echo "Waiting 5 seconds before starting the next bot."
+                sleep 5
+              fi
+            done <<< "$BOT_CREDENTIALS"
+
+            if [ "$count" -eq 0 ]; then
+              echo "No bot usernames were found in BOT_CREDENTIALS."
+              exit 1
+            fi
           fi
 
-          echo "Started $count bot process(es). Waiting for them to exit."
+          echo "Waiting for all ${#expected_bots[@]} bot(s) to confirm login..."
+          deadline=$((SECONDS + 120))
+          while true; do
+            all_logged_in=true
+            for username in "${expected_bots[@]}"; do
+              safe_name="$(printf '%s' "$username" | sed 's/[^a-zA-Z0-9_-]/_/g')"
+              if [ ! -f "$STATUS_DIR/$safe_name.logged-in" ]; then
+                all_logged_in=false
+                break
+              fi
+            done
+            if [ "$all_logged_in" = true ]; then
+              echo "SUCCESS: All ${#expected_bots[@]} bot(s) successfully logged in:"
+              printf ' - %s\n' "${expected_bots[@]}"
+              break
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "ERROR: Timed out waiting for every bot to confirm login."
+              for username in "${expected_bots[@]}"; do
+                safe_name="$(printf '%s' "$username" | sed 's/[^a-zA-Z0-9_-]/_/g')"
+                if [ -f "$STATUS_DIR/$safe_name.logged-in" ]; then
+                  echo "  Logged in: $username"
+                else
+                  echo "  Login NOT confirmed: $username"
+                fi
+              done
+              exit 1
+            fi
+            sleep 2
+          done
+
+          echo "Bots remain running. Waiting for them to exit."
           wait
