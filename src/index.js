@@ -515,12 +515,17 @@ async function handleCommand(rawMessage, username) {
       await bot.look(-179 * Math.PI / 180, 0.6 * Math.PI / 180, true);
       const npc = bot.entityAtCursor(5);
       if (npc) {
-        bot.activateEntity(npc);
+        await bot.activateEntity(npc);
         console.log('[' + bot.username + '] Right-clicked the entity in view after RTP positioning.');
+        // Server-side NPC/plugin interactions can overwrite the bot's rotation.
+        // Reapply north-facing, level view after the interaction has had time to run.
+        await waitMs(1200);
+        await bot.look(-Math.PI, 0, true);
+        console.log('[' + bot.username + '] Reapplied north-facing yaw and level pitch after NPC interaction.');
       } else {
         console.warn('[' + bot.username + '] No entity was targeted after RTP positioning; skipped NPC click.');
       }
-      reply('Reached 2 116 -8, facing north.');
+      reply('Reached 2 116 -8; facing north after NPC interaction.');
     } catch (error) {
       console.error('[' + bot.username + '] RTP movement failed:', error.message);
       reply('RTP movement failed for ' + bot.username + '; check the bot log.');
