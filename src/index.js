@@ -5,17 +5,11 @@
 const prismarineItemPath = require.resolve('prismarine-item');
 const prismarineItemLoader = require(prismarineItemPath);
 
-function normalizeEnchantments(value, registry) {
-  if (Array.isArray(value)) return value;
-  const list = value && Array.isArray(value.enchantments) ? value.enchantments : [];
-  return list.map((entry) => {
-    const id = entry?.id;
-    const name = entry?.name
-      ?? (typeof id === 'number'
-        ? registry.enchantments?.[id]?.name
-        : String(id ?? '').replace(/^minecraft:/, ''));
-    return { name: name || null, lvl: entry?.lvl ?? entry?.level ?? 0 };
-  }).filter((entry) => entry.name);
+function normalizeEnchantments() {
+  // BotBuilders chooses tools by material and deliberately ignores enchantments.
+  // Always return the array shape Mineflayer expects, avoiding protocol-specific
+  // enchantment component formats and the enchantments.concat() crash.
+  return [];
 }
 
 function patchedPrismarineItem(registryOrVersion) {
